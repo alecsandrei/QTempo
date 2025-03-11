@@ -950,14 +950,15 @@ class QTempo:
         message_bar = self.iface.messageBar()
         assert message_bar
         message_bar.pushCritical(error.__class__.__name__, str(error))
+        raise error
 
     def _handle_table_of_contents_error(self):
+        self.first_start = True
         self._handle_error_signal(
             RequestError(
                 'Error occured when trying to fetch the table of contents. Check your internet connection and try again.'
             )
         )
-        self.first_start = True
 
     def run(self) -> None:
         if self.first_start is True:

@@ -197,11 +197,8 @@ class Matrix(c.Mapping):
             for other_siruta, row in zip(self.siruta, self.data)
             if siruta == other_siruta
         ]
-        return Matrix(
-            subset,
-            self.fields,
-            t.cast(list[SIRUTA | None], [siruta] * len(subset)),
-        )
+        siruta_list: list[SIRUTA | None] = [siruta] * len(subset)
+        return Matrix(subset, self.fields, siruta_list)
 
     def group_by(
         self,
@@ -214,12 +211,13 @@ class Matrix(c.Mapping):
 
         assert self.siruta
         siruta_notna = [siruta for siruta in self.siruta if siruta is not None]
-        siruta_sorted = sorted(
+        siruta_sorted: list[SIRUTA | None] = sorted(
             set(siruta_notna), key=operator.attrgetter('code')
         )
 
         rows = []
         for siruta in siruta_sorted:
+            assert siruta is not None
             values: list[str | None] = []
             subset = self.get_subset(siruta)
             filter_options = dict(table_options)
@@ -237,7 +235,7 @@ class Matrix(c.Mapping):
                             row[subset.fields.index(subset.fields.value)]
                         )
             rows.append(values)
-        return Matrix(rows, fields, t.cast(list[SIRUTA | None], siruta_sorted))
+        return Matrix(rows, fields, siruta_sorted)
 
 
 class SIRUTA(t.NamedTuple):

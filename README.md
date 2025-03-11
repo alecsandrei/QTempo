@@ -55,5 +55,13 @@ For feature requests, bug reports, or contributions, please visit the [GitHub re
 
 QTempo is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for details.
 
+
 # Disclaimer
 This plugin, QTempo, is an independent project created by Cuvuliuc Alex-Andrei. It is not an official product of the National Institute of Statistics, and Cuvuliuc Alex-Andrei is not affiliated, associated, authorized, endorsed by, or in any way officially connected with National Institute of Statistics or any of its subsidiaries or its affiliates.
+
+# References
+
+[Necula, M., Țîru, A. M., & Oancea, B. (2019). Tempo – an R package to access the TEMPO-Online database. The Journal of National Institute of Statistics, Romanian Statistical Review(3). https://www.revistadestatistica.ro/2019/09/tempo-an-r-package-to-access-the-tempo-online-database/](https://github.com/MarianNecula/TEMPO)
+
+[Vereș, M. (2025). Mark-veres/tempo.py [Python]. https://github.com/mark-veres/tempo.py (Original work published 2024)
+](https://github.com/mark-veres/tempo.py)

@@ -43,6 +43,8 @@ QTempo is a **QGIS Python plugin** designed to simplify the integration of **sta
 6. 🔄 Pivot the table using the grouping options.
 7. 🗺️ Press on **"Add vector layer"** to add the layer to your QGIS project!
 
+Examples can be found at the following playlist [https://www.youtube.com/playlist?list=PLwnLbfcxh3V3g5dXJ1FlzdRsYwn7bYPls](https://youtube.com/playlist?list=PLwnLbfcxh3V3g5dXJ1FlzdRsYwn7bYPls&si=0UfuR-gy2kFRUAOB)
+
 ## 🛠️ Dependencies
 
 QTempo is built entirely using **PyQGIS** and does not require additional Python libraries.

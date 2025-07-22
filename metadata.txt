@@ -9,6 +9,8 @@ email=cuvuliucalexandrei@gmail.com
 changelog=
       1.0.0
         * Initial release
+      1.1.0
+        * Added GISCO Communes service
 experimental=False
 homepage=https://github.com/alecsandrei/QTempo
 repository=https://github.com/alecsandrei/QTempo

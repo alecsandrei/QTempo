@@ -149,7 +149,7 @@ class GISCOCommunes(Service):
 
     @property
     def is_default(self) -> bool:
-        return True
+        return False
 
     def get_layer(self, siruta: list[SIRUTA]) -> QgsVectorLayer:
         siruta_codes = [value.code for value in siruta]

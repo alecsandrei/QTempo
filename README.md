@@ -1,5 +1,7 @@
-# 🚀 QTempo
 
+# 🚀 QTempo
+## 💻 Tutorials
+[![QTempo tutorials](https://github.com/alecsandrei/QTempo/blob/main/assets/thumbnail.png?raw=true)](https://www.youtube.com/watch?v=Jy5HtLveLPw)
 ## 📌 Overview
 
 QTempo is a **QGIS Python plugin** designed to simplify the integration of **statistical and geospatial data**. It provides an intuitive **graphical user interface (GUI)** for querying the **TEMPO-Online** database, managed by the **National Institute of Statistics**, and seamlessly adds the retrieved datasets as layers in **QGIS**. By streamlining this process, QTempo significantly enhances **geospatial analysis** and the **visualization of socio-economic indicators**.

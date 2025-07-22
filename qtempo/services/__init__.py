@@ -1,5 +1,5 @@
 from .abc import Service
 from .ancpi import ANCPI
-from .gisco import GISCO
+from .gisco import GISCOLAU, GISCOCommunes
 
-__all__ = ['Service', 'GISCO', 'ANCPI']
+__all__ = ['Service', 'GISCOLAU', 'GISCOCommunes', 'ANCPI']

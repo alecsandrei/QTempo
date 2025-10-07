@@ -24,4 +24,4 @@ experimental=False
 homepage=https://github.com/alecsandrei/QTempo
 repository=https://github.com/alecsandrei/QTempo
 tracker=https://github.com/alecsandrei/QTempo/issues
-icon=../assets/icon.ico
+icon=assets/icon.ico

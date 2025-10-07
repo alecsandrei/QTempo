@@ -7,7 +7,7 @@ from urllib.parse import urljoin
 from qgis.PyQt import QtCore
 
 _PARENT_URL = 'http://statistici.insse.ro:8077/tempo-ins/'
-_ASSETS_DIR = Path(__file__).parent.parent / 'assets'
+_ASSETS_DIR = Path(__file__).parent / 'assets'
 
 
 class Asset(Enum):

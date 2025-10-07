@@ -4,7 +4,7 @@ from enum import Enum, auto
 from pathlib import Path
 from urllib.parse import urljoin
 
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt import QtCore
 
 _PARENT_URL = 'http://statistici.insse.ro:8077/tempo-ins/'
 _ASSETS_DIR = Path(__file__).parent.parent / 'assets'
@@ -48,8 +48,8 @@ class UserRole(Enum):
     @staticmethod
     def _generate_next_value_(name, start, count, last_values):
         if not last_values:
-            return start + Qt.UserRole
-        return last_values[-1] + Qt.UserRole
+            return start + QtCore.Qt.ItemDataRole.UserRole
+        return last_values[-1] + QtCore.Qt.ItemDataRole.UserRole
 
 
 class QTreeWidgetItemRole(UserRole):

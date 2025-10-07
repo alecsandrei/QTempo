@@ -20,7 +20,7 @@ class QListWidgetAlwaysSelected(QListWidget):
 
     def __init__(self, parent: QWidget):
         super().__init__(parent)
-        self.setSelectionMode(QAbstractItemView.MultiSelection)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
         self.model().rowsInserted.connect(self._select_first_row)
 
     def _select_first_row(

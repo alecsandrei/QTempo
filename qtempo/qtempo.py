@@ -154,7 +154,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
 
     def display_dialog(self) -> None:
         self.show()
-        self.exec_()
+        self.exec()
 
     def fill_table_of_contents(self) -> None:
         nodes = t.cast(
@@ -623,7 +623,9 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             return None
 
         request = QNetworkRequest(QUrl(self.preprocess_url(URL.TABLE.value)))
-        request.setHeader(QNetworkRequest.ContentTypeHeader, 'application/json')
+        request.setHeader(
+            QNetworkRequest.KnownHeaders.ContentTypeHeader, 'application/json'
+        )
         self.disable_gui()
         reply = self.request_handler.post(
             request,

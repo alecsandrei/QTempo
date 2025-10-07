@@ -3,14 +3,10 @@ name=QTempo
 qgisMinimumVersion=3.0
 description=Plugin for accessing data from the TEMPO-Online statistical database of the National Institute of Statistics of Romania
 about=QTempo is a QGIS Python plugin that provides an intuitive GUI for querying the TEMPO-Online database and seamlessly adding datasets as separate layers in the software. TEMPO-Online is a statistical database provided by the National Institute of Statistics, offering a wide range of socio-economic indicators. In addition to its online platform, available on the National Institute of Statistics website, the datasets can also be accessed via the TEMPO-Online REST API. This API provides endpoints for both GET requests (retrieving statistical domains, metadata, etc.) and POST requests (querying datasets), with responses formatted in JSON.
-version=1.1.0
+version=1.2.0
 author=Cuvuliuc Alex-Andrei
 email=cuvuliucalexandrei@gmail.com
-changelog=
-      1.0.0
-        * Initial release
-      1.1.0
-        * Added GISCO Communes service
+changelog=changelog
 experimental=False
 homepage=https://github.com/alecsandrei/QTempo
 repository=https://github.com/alecsandrei/QTempo

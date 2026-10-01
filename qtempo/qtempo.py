@@ -40,6 +40,7 @@ from qgis.PyQt.QtWidgets import (
     QComboBox,
     QDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLayout,
@@ -123,9 +124,6 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.pushButtonServiceInformation.clicked.connect(
             self.display_service_information
         )
-        self.comboBoxGroupByField.currentIndexChanged.connect(
-            self.add_table_options
-        )
         self.pushButtonAddTableLayer.clicked.connect(self.add_table_layer)
         self.pushButtonAddVectorLayer.clicked.connect(self.add_vector_layer)
         self.checkBoxEnglish.clicked.connect(self.handle_changed_language)
@@ -153,6 +151,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
 
         # style
         self.tabWidgetMatrix.setTabEnabled(Tabs.MAP.value, False)
+        self.mGroupBoxTableOptions.setVisible(False)
         self.treeWidgetTableOfContents.setHeaderLabel('')
         self.add_services()
 
@@ -180,8 +179,11 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             QPushButton, self.pushButtonServiceInformation
         )
         self.listWidgetServices = t.cast(QListWidget, self.listWidgetServices)
-        self.comboBoxGroupByField = t.cast(QComboBox, self.comboBoxGroupByField)
+        self.mGroupBoxTableOptions = t.cast(
+            QgsCollapsibleGroupBox, self.mGroupBoxTableOptions
+        )
         self.frameTableOptions = t.cast(QFrame, self.frameTableOptions)
+        self.labelTableSummary = t.cast(QLabel, self.labelTableSummary)
         self.pushButtonAddTableLayer = t.cast(
             QPushButton, self.pushButtonAddTableLayer
         )
@@ -379,6 +381,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.clear_table()
         self.pushButtonAddTableLayer.setEnabled(False)
         self.pushButtonAddVectorLayer.setEnabled(False)
+        self.mGroupBoxTableOptions.setVisible(False)
         self.tabWidgetMatrix.setTabEnabled(Tabs.MAP.value, False)
         self.reset_downloads()
 
@@ -654,58 +657,96 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             },
         )
 
-    def add_fields_to_group_by_combo_box(self) -> None:
-        model = self.get_model_matrix()
-        assert model is not None
-        fields = model.fields
-        with QSignalBlocker(self.comboBoxGroupByField):
-            if self.comboBoxGroupByField.count():
-                self.comboBoxGroupByField.clear()
-            self.comboBoxGroupByField.addItems(
-                [
-                    field_.name
-                    for field_ in fields
-                    if not field_.is_geo and not field_.is_value
-                ]
-            )
-        self.comboBoxGroupByField.setCurrentIndex(0)
-        self.comboBoxGroupByField.currentIndexChanged.emit(0)
+    def get_matrix(self) -> Matrix | None:
+        """The queried data of the selected matrix."""
+        current_item = self.listWidgetMatrices.currentItem()
+        if current_item is None:
+            return None
+        return current_item.data(QListWidgetItemRole.MATRIX.value)
 
     def get_model_matrix(self) -> Matrix | None:
+        """The pivoted data shown in the table."""
         model = self.tableViewMatrix.model()
         if model is None:
             return None
         return t.cast(MatrixModel, model)._matrix
 
-    def add_table_options(self) -> None:
-        matrix = self.get_model_matrix()
-        self.pushButtonAddVectorLayer.setEnabled(True)
-        assert matrix is not None
-        group_by_field = self.comboBoxGroupByField.currentText()
+    def add_table_options(self, matrix: Matrix) -> None:
+        """Adds a combo box for each dimension with more than one value. An
+        empty choice spreads all the values into columns."""
+        default = matrix.default_fixed()
         layout = self.frameTableOptions.layout()
         if layout is not None:
             delete_layout_items(layout)
         else:
-            layout = QVBoxLayout(self.frameTableOptions)
+            layout = QGridLayout(self.frameTableOptions)
             self.frameTableOptions.setLayout(layout)
-        for field_, values in matrix.items():
-            if (
-                field_.is_geo
-                or field_.is_value
-                or field_.name == group_by_field
-            ):
-                continue
+        layout = t.cast(QGridLayout, layout)
+        dimensions = [
+            field_
+            for field_ in matrix.dimensions
+            if len(matrix.distinct(field_)) > 1
+        ]
+        for i, field_ in enumerate(dimensions):
             label = QLabel(
                 textwrap.fill(field_.name, width=40), self.frameTableOptions
             )
             combo_box = QComboBox(self.frameTableOptions)
             add_completer_to_combo_box(combo_box)
-            combo_box.addItems(sorted(set(values)))
-            combo_box.setProperty(WidgetProperty.FIELD.value, field_)
-            if combo_box.count() == 1:
+            combo_box.setToolTip('Leave empty to show every value as a column.')
+            combo_box.addItem('', None)
+            for value in matrix.distinct(field_):
+                combo_box.addItem(value, value)
+            if field_ in default:
+                combo_box.setCurrentIndex(combo_box.findText(default[field_]))
+            else:
                 combo_box.setCurrentIndex(0)
-            layout.addWidget(label)
-            layout.addWidget(combo_box)
+            combo_box.setProperty(WidgetProperty.FIELD.value, field_)
+            combo_box.currentIndexChanged.connect(self.update_table_view)
+            row, column = divmod(i, 2)
+            layout.addWidget(label, row, column * 2)
+            layout.addWidget(combo_box, row, column * 2 + 1)
+        layout.setColumnStretch(1, 1)
+        layout.setColumnStretch(3, 1)
+
+    def get_fixed(self, matrix: Matrix) -> dict[Field, str]:
+        """The value chosen for each dimension. The dimensions with a single
+        value are fixed to it."""
+        fixed = {
+            field_: values[0]
+            for field_ in matrix.dimensions
+            if len(values := matrix.distinct(field_)) == 1
+        }
+        layout = self.frameTableOptions.layout()
+        # Read from the layout, as the replaced combo boxes are only
+        # deleted later
+        combo_boxes = [] if layout is None else get_widgets(layout, QComboBox)
+        for combo_box in combo_boxes:
+            value = combo_box.currentData()
+            if value is not None:
+                field_ = combo_box.property(WidgetProperty.FIELD.value)
+                fixed[t.cast(Field, field_)] = value
+        return fixed
+
+    def update_table_view(self) -> None:
+        """Shows one row per unit, or the queried rows if the data has no
+        units."""
+        matrix = self.get_matrix()
+        if matrix is None:
+            return None
+        shown = (
+            matrix.pivot(self.get_fixed(matrix)) if matrix.has_units else matrix
+        )
+        old_model = self.tableViewMatrix.model()
+        self.tableViewMatrix.setModel(MatrixModel(shown, self.tableViewMatrix))
+        if old_model is not None:
+            old_model.deleteLater()
+        self.tableViewMatrix.resizeColumnsToContents()
+        rows, columns = len(shown.data), len(shown.fields)
+        self.labelTableSummary.setText(
+            f'{rows} row{"s" * (rows != 1)} × '
+            f'{columns} column{"s" * (columns != 1)}'
+        )
 
     def get_map_levels(self, matrix: Matrix) -> list[Level]:
         """The levels to map, one layer each. The national total is only
@@ -716,11 +757,8 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         return levels
 
     def handle_map_tab(self) -> None:
-        current_item = self.listWidgetMatrices.currentItem()
-        assert current_item
-        data = t.cast(
-            Matrix, current_item.data(QListWidgetItemRole.MATRIX.value)
-        )
+        data = self.get_matrix()
+        assert data is not None
         self.tabWidgetMatrix.setTabEnabled(Tabs.MAP.value, data.has_units)
         if not data.has_units:
             return None
@@ -799,7 +837,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         )
 
     def validate_join(self) -> None:
-        matrix = self.get_model_matrix()
+        matrix = self.get_matrix()
         assert matrix is not None
         available = self.get_nuts_units()
         if available is None:
@@ -878,22 +916,19 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
 
     def clear_table_options(self) -> None:
         delete_layout_items(self.frameTableOptions.layout())
-        with QSignalBlocker(self.comboBoxGroupByField):
-            self.comboBoxGroupByField.clear()
+        self.labelTableSummary.clear()
 
     def update_table(self) -> None:
-        current_item = self.listWidgetMatrices.currentItem()
-        if current_item is None:
+        matrix = self.get_matrix()
+        if matrix is None:
             return None
-        data = t.cast(
-            Matrix, current_item.data(QListWidgetItemRole.MATRIX.value)
-        )
-        model = MatrixModel(data, self.tabWidgetMatrix)
-        self.tableViewMatrix.setModel(model)
-        self.tableViewMatrix.resizeColumnsToContents()
-        self.tabWidgetMatrix.setCurrentIndex(Tabs.TABLE.value)
         self.clear_table_options()
-        self.add_fields_to_group_by_combo_box()
+        self.mGroupBoxTableOptions.setVisible(matrix.has_units)
+        if matrix.has_units:
+            self.add_table_options(matrix)
+        self.update_table_view()
+        self.pushButtonAddVectorLayer.setEnabled(matrix.has_units)
+        self.tabWidgetMatrix.setCurrentIndex(Tabs.TABLE.value)
 
     def display_service_information(self) -> None:
         if not (items := self.listWidgetServices.selectedItems()):
@@ -937,21 +972,6 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             if class_.is_default:
                 item.setSelected(True)
 
-    def get_table_options(self) -> dict[Field, str]:
-        options_combo_boxes = get_children(self.frameTableOptions, QComboBox)
-        return {
-            combo_box.property(
-                WidgetProperty.FIELD.value
-            ): combo_box.currentText()
-            for combo_box in options_combo_boxes
-        }
-
-    def get_grouped_matrix(self, matrix: Matrix) -> Matrix:
-        group_by_field = self.comboBoxGroupByField.currentText()
-        return matrix.group_by(
-            matrix.fields.get(group_by_field), self.get_table_options()
-        )
-
     def add_vector_layer(self) -> None:
         matrix = self.get_model_matrix()
         assert matrix is not None
@@ -975,28 +995,25 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             return self.push_nuts_index_warning()
         code = self.get_matrix_code()
         assert code is not None
-        grouped = {
-            level: self.get_grouped_matrix(matrix.filter_level(level))
-            for level in levels
-        }
-        units = [
+        by_level = {level: matrix.filter_level(level) for level in levels}
+        units = dict.fromkeys(
             nuts.Unit(unit.code, nuts.SPATIAL_TYPE, scale, projection, year)
-            for level_matrix in grouped.values()
+            for level_matrix in by_level.values()
             for unit in level_matrix.units or []
             if unit is not None
-        ]
+        )
         self.downloader = nuts.BoundaryDownloader(
             units, self.tableWidgetDownloads
         )
         self.downloader.finished.connect(
-            partial(self.add_nuts_boundaries, grouped, code, projection)
+            partial(self.add_nuts_boundaries, by_level, code, projection)
         )
         self.pushButtonAddVectorLayer.setEnabled(False)
         self.downloader.start()
 
     def add_nuts_boundaries(
         self,
-        grouped: dict[Level, Matrix],
+        by_level: dict[Level, Matrix],
         name: str,
         projection: str,
         boundaries: nuts.Boundaries,
@@ -1024,22 +1041,21 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                     f'{name} — {level.label}',
                     f'EPSG:{projection}',
                 )
-                for level, level_matrix in grouped.items()
+                for level, level_matrix in by_level.items()
             ]
         )
 
     def add_localities_layer(self, matrix: Matrix) -> None:
         service = self.get_selected_service()
         assert service is not None
-        grouped = self.get_grouped_matrix(matrix)
         task = FetchLocalitiesTask(
-            service, [unit for unit in grouped.units or [] if unit is not None]
+            service, [unit for unit in matrix.units or [] if unit is not None]
         )
         task.taskCompleted.connect(
             partial(
                 self.add_localities_boundaries,
                 task,
-                grouped,
+                matrix,
                 f'{self.get_matrix_code()} — {Level.LOCALITY.label}',
             )
         )
@@ -1057,13 +1073,13 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         )
 
     def add_localities_boundaries(
-        self, task: FetchLocalitiesTask, grouped: Matrix, name: str
+        self, task: FetchLocalitiesTask, matrix: Matrix, name: str
     ) -> None:
         self.localities_task = None
         self.pushButtonAddVectorLayer.setEnabled(True)
         self.add_layers(
             [
-                grouped.join_boundaries(
+                matrix.join_boundaries(
                     task.fields,
                     task.features,
                     task.service.siruta_field,
@@ -1161,9 +1177,18 @@ class MatrixModel(QAbstractTableModel):
     def data(
         self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole
     ) -> t.Any | None:
-        if index.isValid():
-            if role == Qt.ItemDataRole.DisplayRole:
-                return self._matrix.data[index.row()][index.column()]
+        if not index.isValid():
+            return None
+        is_value = self._matrix.fields[index.column()].is_value
+        if role == Qt.ItemDataRole.DisplayRole:
+            value = self._matrix.data[index.row()][index.column()]
+            if value is None:
+                return ''
+            if isinstance(value, float) and value.is_integer():
+                return str(int(value))
+            return str(value)
+        if role == Qt.ItemDataRole.TextAlignmentRole and is_value:
+            return Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         return None
 
     def headerData(

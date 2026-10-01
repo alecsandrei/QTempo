@@ -7,6 +7,8 @@ import typing as t
 
 from qgis.PyQt.QtCore import QCoreApplication
 
+from qtempo.matrix import Matrix
+
 
 def square(x: float, y: float, **properties: t.Any) -> dict[str, t.Any]:
     """A GeoJSON feature with a unit square at (x, y)."""
@@ -70,3 +72,71 @@ def wait_until(condition: c.Callable[[], object], timeout: float = 10) -> None:
             raise TimeoutError('The condition was not met in time')
         QCoreApplication.processEvents()
         time.sleep(0.01)
+
+
+CATEGORIES = dimension(1, 'Categorii', ['Agricola', 'Arabila'])
+YEARS = dimension(3, 'Ani', ['Anul 1990', 'Anul 2000'])
+SAI = 'Mun. Bucuresti -incl. SAI'
+
+
+def agr101a() -> Matrix:
+    """Agricultural area by county, where the 1990 value of Bucharest
+    includes today's Ilfov."""
+    counties = dimension(2, 'Judete', ['Municipiul Bucuresti', 'Ilfov', SAI])
+    response = pivot(
+        ['Categorii', 'Judete', 'Ani', 'Valoare'],
+        ['Agricola', SAI, 'Anul 1990', '182115'],
+        ['Agricola', 'Municipiul Bucuresti', 'Anul 2000', '23787'],
+        ['Agricola', 'Ilfov', 'Anul 2000', '158328'],
+        ['Arabila', 'Municipiul Bucuresti', 'Anul 2000', '100'],
+        ['Arabila', 'Ilfov', 'Anul 2000', '200'],
+    )
+    return Matrix.from_response(
+        response,
+        request_body(matTime=3),
+        leaf_node(CATEGORIES, counties, YEARS),
+    )
+
+
+def localities() -> Matrix:
+    labels = [
+        'TOTAL',
+        '1017 Municipiul Alba Iulia',
+        '179132 Municipiul Bucuresti',
+    ]
+    response = pivot(
+        ['Localitati', 'Ani', 'Valoare'],
+        *([label, 'Anul 2000', '1'] for label in labels),
+    )
+    return Matrix.from_response(
+        response,
+        request_body(matTime=2, nomLoc=1, matSiruta=1),
+        leaf_node(dimension(1, 'Localitati', labels), YEARS),
+    )
+
+
+def by_sex() -> Matrix:
+    sexes = dimension(1, 'Sexe', ['Masculin', 'Total'])
+    response = pivot(
+        ['Sexe', 'Judete', 'Ani', 'Valoare'],
+        *(
+            [sex, 'Cluj', year, '1']
+            for sex in ('Masculin', 'Total')
+            for year in ('Anul 1990', 'Anul 2000')
+        ),
+    )
+    return Matrix.from_response(
+        response,
+        request_body(matTime=3),
+        leaf_node(sexes, dimension(2, 'Judete', ['Cluj']), YEARS),
+    )
+
+
+def not_geographic() -> Matrix:
+    response = pivot(
+        ['Categorii', 'Ani', 'Valoare'],
+        ['Agricola', 'Anul 2000', '1'],
+    )
+    return Matrix.from_response(
+        response, request_body(matTime=2), leaf_node(CATEGORIES, YEARS)
+    )

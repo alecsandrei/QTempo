@@ -144,6 +144,77 @@ class Matrix(c.Mapping):
             }
         )
 
+    @property
+    def dimensions(self) -> list[Field]:
+        """The fields which can be pivoted, i.e. neither geographic nor
+        values."""
+        return [
+            field_
+            for field_ in self.fields
+            if not field_.is_geo and not field_.is_value
+        ]
+
+    def distinct(self, field_: Field) -> list[t.Any]:
+        """The values of a field, in the order of the query."""
+        return list(dict.fromkeys(self[field_]))
+
+    def default_fixed(self) -> dict[Field, str]:
+        """The value of each dimension, except the years, which become
+        columns. Dimensions are fixed to their total, else to their first
+        value."""
+        fixed = {}
+        for field_ in self.dimensions:
+            values = self.distinct(field_)
+            if len(values) > 1 and field_.is_time:
+                continue
+            totals = [
+                value for value in values if value.strip().lower() == 'total'
+            ]
+            fixed[field_] = (totals or values)[0]
+        return fixed
+
+    def pivot(self, fixed: c.Mapping[Field, str]) -> Matrix:
+        """Keeps the rows with the fixed values and spreads the other
+        dimensions into one value column per combination of their values,
+        so that each unit is one row."""
+        value_index = self.fields.index(self.fields.value)
+        filters = [
+            (self.fields.index(field_), value)
+            for field_, value in fixed.items()
+        ]
+        column_indices = [
+            self.fields.index(field_)
+            for field_ in self.dimensions
+            if field_ not in fixed
+        ]
+        row_fields = [field_ for field_ in self.fields if field_.is_geo]
+        row_indices = [self.fields.index(field_) for field_ in row_fields]
+
+        columns: dict[tuple[t.Any, ...], None] = {}
+        rows: dict[tuple[t.Any, ...], dict[tuple[t.Any, ...], t.Any]] = {}
+        units: dict[tuple[t.Any, ...], TerritorialUnit | None] = {}
+        for i, row in enumerate(self.data):
+            if not all(row[index] == value for index, value in filters):
+                continue
+            key = tuple(row[index] for index in row_indices)
+            column = tuple(row[index] for index in column_indices)
+            columns.setdefault(column)
+            rows.setdefault(key, {}).setdefault(column, row[value_index])
+            units.setdefault(key, self.units[i] if self.units else None)
+
+        value_fields = [
+            Field(' · '.join(column) or self.fields.value.name, is_value=True)
+            for column in columns
+        ]
+        return Matrix(
+            [
+                [*key, *(cells.get(column) for column in columns)]
+                for key, cells in rows.items()
+            ],
+            Fields([*row_fields, *value_fields]),
+            list(units.values()) if self.units is not None else None,
+        )
+
     @staticmethod
     def parse_query_response(response: str) -> dict[str, list[t.Any]]:
         lines_split = iter(response.splitlines())
@@ -188,7 +259,8 @@ class Matrix(c.Mapping):
             return Fields(fields)
 
         fields = get_fields()
-        rows = [list(row) for row in zip(*data.values())]
+        # The values are the last column
+        rows = [[*row[:-1], to_float(row[-1])] for row in zip(*data.values())]
         if request_body['matSiruta'] == 1:
             loc_index = request_body['nomLoc'] - 1
             fields[loc_index].is_unit = True
@@ -285,42 +357,6 @@ class Matrix(c.Mapping):
                 rows.append(row)
                 units.append(unit)
         return Matrix(rows, self.fields, units)
-
-    def group_by(
-        self,
-        group_by: Field,
-        table_options: c.Mapping[Field, str],
-    ) -> Matrix:
-        """Pivots the matrix to one row per unit and one column per value
-        of the group_by field, keeping the rows that match table_options."""
-        assert self.units is not None
-        names = sorted(set(self[group_by]))
-        columns = {name: i for i, name in enumerate(names)}
-        group_index = self.fields.index(group_by)
-        value_index = self.fields.index(self.fields.value)
-        filters = [
-            (self.fields.index(field_), value)
-            for field_, value in table_options.items()
-        ]
-
-        units: dict[str, TerritorialUnit] = {}
-        rows: dict[str, list[t.Any]] = {}
-        for unit, row in zip(self.units, self.data):
-            if unit is None:
-                continue
-            units.setdefault(unit.code, unit)
-            values = rows.setdefault(unit.code, [None] * len(names))
-            if all(row[index] == value for index, value in filters):
-                column = columns[row[group_index]]
-                if values[column] is None:
-                    values[column] = row[value_index]
-
-        codes = sorted(rows)
-        return Matrix(
-            [rows[code] for code in codes],
-            Fields([Field(name, is_value=True) for name in names]),
-            [units[code] for code in codes],
-        )
 
     def join_boundaries(
         self,

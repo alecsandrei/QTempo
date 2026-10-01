@@ -13,53 +13,19 @@ from qtempo.enums import Level
 from qtempo.matrix import Matrix, to_float
 
 from .helpers import (
+    SAI,
+    YEARS,
+    agr101a,
+    by_sex,
     dimension,
     feature_collection,
     leaf_node,
+    localities,
+    not_geographic,
     pivot,
     request_body,
     square,
 )
-
-CATEGORIES = dimension(1, 'Categorii', ['Agricola', 'Arabila'])
-YEARS = dimension(3, 'Ani', ['Anul 1990', 'Anul 2000'])
-SAI = 'Mun. Bucuresti -incl. SAI'
-
-
-def agr101a() -> Matrix:
-    """Agricultural area by county, where the 1990 value of Bucharest
-    includes today's Ilfov."""
-    counties = dimension(2, 'Judete', ['Municipiul Bucuresti', 'Ilfov', SAI])
-    response = pivot(
-        ['Categorii', 'Judete', 'Ani', 'Valoare'],
-        ['Agricola', SAI, 'Anul 1990', '182115'],
-        ['Agricola', 'Municipiul Bucuresti', 'Anul 2000', '23787'],
-        ['Agricola', 'Ilfov', 'Anul 2000', '158328'],
-        ['Arabila', 'Municipiul Bucuresti', 'Anul 2000', '100'],
-        ['Arabila', 'Ilfov', 'Anul 2000', '200'],
-    )
-    return Matrix.from_response(
-        response,
-        request_body(matTime=3),
-        leaf_node(CATEGORIES, counties, YEARS),
-    )
-
-
-def localities() -> Matrix:
-    labels = [
-        'TOTAL',
-        '1017 Municipiul Alba Iulia',
-        '179132 Municipiul Bucuresti',
-    ]
-    response = pivot(
-        ['Localitati', 'Ani', 'Valoare'],
-        *([label, 'Anul 2000', '1'] for label in labels),
-    )
-    return Matrix.from_response(
-        response,
-        request_body(matTime=2, nomLoc=1, matSiruta=1),
-        leaf_node(dimension(1, 'Localitati', labels), YEARS),
-    )
 
 
 def mixed_levels() -> Matrix:
@@ -77,6 +43,11 @@ def mixed_levels() -> Matrix:
         request_body(matTime=2, matRegJ=1),
         leaf_node(dimension(1, 'Regiuni', labels), YEARS),
     )
+
+
+def agricultural(matrix: Matrix) -> Matrix:
+    """The agricultural area, with one column per year."""
+    return matrix.pivot({matrix.fields.get('Categorii'): 'Agricola'})
 
 
 def codes(matrix: Matrix) -> list[str | None]:
@@ -106,18 +77,80 @@ def test_unresolved_labels() -> None:
     assert agr101a().unresolved_labels == [SAI]
 
 
-def test_group_by_keeps_bucharest_apart_from_the_agricultural_sector() -> None:
+def test_values_are_numbers() -> None:
+    assert agr101a()[agr101a().fields.value] == [
+        182115.0,
+        23787.0,
+        158328.0,
+        100.0,
+        200.0,
+    ]
+
+
+def test_distinct_keeps_the_query_order() -> None:
     matrix = agr101a()
-    grouped = matrix.group_by(
-        matrix.fields.get('Ani'),
-        {matrix.fields.get('Categorii'): 'Agricola'},
-    )
-    assert [field_.name for field_ in grouped.fields] == [
+    assert matrix.distinct(matrix.fields.unit) == [
+        SAI,
+        'Municipiul Bucuresti',
+        'Ilfov',
+    ]
+
+
+def test_pivot_keeps_bucharest_apart_from_the_agricultural_sector() -> None:
+    pivoted = agricultural(agr101a())
+    assert [field_.name for field_ in pivoted.fields] == [
+        'Judete',
         'Anul 1990',
         'Anul 2000',
     ]
-    assert codes(grouped) == ['RO321', 'RO322']
-    assert grouped.data == [[None, '23787'], [None, '158328']]
+    assert codes(pivoted) == [None, 'RO321', 'RO322']
+    assert pivoted.data == [
+        [SAI, 182115.0, None],
+        ['Municipiul Bucuresti', None, 23787.0],
+        ['Ilfov', None, 158328.0],
+    ]
+
+
+def test_pivot_with_two_column_dimensions() -> None:
+    pivoted = agr101a().pivot({})
+    assert [field_.name for field_ in pivoted.fields] == [
+        'Judete',
+        'Agricola · Anul 1990',
+        'Agricola · Anul 2000',
+        'Arabila · Anul 2000',
+    ]
+    assert pivoted.data == [
+        [SAI, 182115.0, None, None],
+        ['Municipiul Bucuresti', None, 23787.0, 100.0],
+        ['Ilfov', None, 158328.0, 200.0],
+    ]
+
+
+def test_default_fixed() -> None:
+    matrix = agr101a()
+    assert matrix.default_fixed() == {
+        matrix.fields.get('Categorii'): 'Agricola'
+    }
+
+
+def test_default_fixed_prefers_the_total() -> None:
+    matrix = by_sex()
+    assert matrix.default_fixed() == {matrix.fields.get('Sexe'): 'Total'}
+
+
+def test_pivot_with_every_dimension_fixed() -> None:
+    matrix = localities()
+    pivoted = matrix.pivot(matrix.default_fixed())
+    assert [field_.name for field_ in pivoted.fields] == [
+        'Localitati',
+        'Valoare',
+    ]
+    assert codes(pivoted) == [None, '1017', '179132']
+
+
+def test_default_fixed_keeps_the_single_values() -> None:
+    matrix = localities()
+    assert matrix.default_fixed() == {matrix.fields.get('Ani'): 'Anul 2000'}
 
 
 def test_localities() -> None:
@@ -129,13 +162,7 @@ def test_localities() -> None:
 
 
 def test_not_geographic() -> None:
-    response = pivot(
-        ['Categorii', 'Ani', 'Valoare'],
-        ['Agricola', 'Anul 2000', '1'],
-    )
-    matrix = Matrix.from_response(
-        response, request_body(matTime=2), leaf_node(CATEGORIES, YEARS)
-    )
+    matrix = not_geographic()
     assert not matrix.has_units
     assert matrix.levels == []
     assert matrix.unresolved_labels == []
@@ -167,11 +194,7 @@ def test_as_table_adds_the_siruta_codes() -> None:
 
 
 def test_join_boundaries() -> None:
-    matrix = agr101a()
-    grouped = matrix.group_by(
-        matrix.fields.get('Ani'),
-        {matrix.fields.get('Categorii'): 'Agricola'},
-    )
+    pivoted = agricultural(agr101a())
     geojson = feature_collection(
         square(0, 0, NUTS_ID='RO321', NAME_LATN='Bucureşti'),
         square(1, 0, NUTS_ID='RO322', NAME_LATN='Ilfov'),
@@ -179,30 +202,27 @@ def test_join_boundaries() -> None:
     )
     fields = QgsJsonUtils.stringToFields(geojson)
     features = QgsJsonUtils.stringToFeatureList(geojson, fields)
-    layer = grouped.join_boundaries(
+    layer = pivoted.join_boundaries(
         fields, features, 'NUTS_ID', 'AGR101A', 'EPSG:3844'
     )
     assert layer.crs().authid() == 'EPSG:3844'
     assert layer.fields().names() == [
         'NUTS_ID',
         'NAME_LATN',
+        'Judete',
         'Anul 1990',
         'Anul 2000',
     ]
     assert values(layer, 'NUTS_ID') == {
-        'RO321': ['RO321', 'Bucureşti', None, 23787.0],
-        'RO322': ['RO322', 'Ilfov', None, 158328.0],
+        'RO321': ['RO321', 'Bucureşti', 'Municipiul Bucuresti', None, 23787.0],
+        'RO322': ['RO322', 'Ilfov', 'Ilfov', None, 158328.0],
     }
     for feature in layer.getFeatures():
         assert QgsWkbTypes.isMultiType(feature.geometry().wkbType())
 
 
 def test_join_boundaries_with_another_schema() -> None:
-    matrix = agr101a()
-    grouped = matrix.group_by(
-        matrix.fields.get('Ani'),
-        {matrix.fields.get('Categorii'): 'Agricola'},
-    )
+    pivoted = agricultural(agr101a())
     geojson = feature_collection(
         square(0, 0, NUTS_ID='RO321', NAME_LATN='Bucureşti')
     )
@@ -214,7 +234,7 @@ def test_join_boundaries_with_another_schema() -> None:
             other, QgsJsonUtils.stringToFields(other)
         ),
     ]
-    layer = grouped.join_boundaries(fields, features, 'NUTS_ID', 'AGR101A')
+    layer = pivoted.join_boundaries(fields, features, 'NUTS_ID', 'AGR101A')
     assert values(layer, 'NUTS_ID')['RO322'][:2] == ['RO322', None]
 
 

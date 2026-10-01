@@ -153,9 +153,38 @@
           </attribute>
           <layout class="QGridLayout" name="gridLayout_3">
            <item row="0" column="0">
-            <widget class="QTableView" name="tableViewMatrix"/>
+            <widget class="QgsCollapsibleGroupBox" name="mGroupBoxTableOptions">
+             <property name="title">
+              <string>Options</string>
+             </property>
+             <layout class="QVBoxLayout" name="verticalLayout_5">
+              <item>
+               <widget class="QFrame" name="frameTableOptions"/>
+              </item>
+              <item>
+               <widget class="QLabel" name="labelTableSummary">
+                <property name="text">
+                 <string/>
+                </property>
+                <property name="wordWrap">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
            </item>
            <item row="1" column="0">
+            <widget class="QTableView" name="tableViewMatrix">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+               <horstretch>0</horstretch>
+               <verstretch>1</verstretch>
+              </sizepolicy>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="0">
             <widget class="QPushButton" name="pushButtonAddTableLayer">
              <property name="text">
               <string>Add table layer</string>
@@ -302,35 +331,6 @@
              <property name="text">
               <string>Add vector layer</string>
              </property>
-            </widget>
-           </item>
-           <item row="3" column="0">
-            <widget class="QgsCollapsibleGroupBox" name="mGroupBoxTableOptions">
-             <property name="title">
-              <string>Table options</string>
-             </property>
-             <layout class="QGridLayout" name="gridLayout_7">
-              <item row="1" column="0">
-               <widget class="QComboBox" name="comboBoxGroupByField"/>
-              </item>
-              <item row="0" column="0">
-               <widget class="QLabel" name="label_2">
-                <property name="text">
-                 <string>Group by field</string>
-                </property>
-               </widget>
-              </item>
-              <item row="2" column="0">
-               <widget class="QFrame" name="frameTableOptions">
-                <property name="frameShape">
-                 <enum>QFrame::StyledPanel</enum>
-                </property>
-                <property name="frameShadow">
-                 <enum>QFrame::Raised</enum>
-                </property>
-               </widget>
-              </item>
-             </layout>
             </widget>
            </item>
           </layout>

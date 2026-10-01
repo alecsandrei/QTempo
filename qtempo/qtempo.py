@@ -9,7 +9,7 @@ import typing as t
 from dataclasses import dataclass, field
 from urllib.parse import urljoin
 
-import processing
+from qgis import processing
 from qgis.core import QgsNetworkAccessManager, QgsProject, QgsVectorLayer
 from qgis.gui import QgisInterface, QgsCollapsibleGroupBox
 from qgis.PyQt import uic

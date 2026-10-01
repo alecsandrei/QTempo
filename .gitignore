@@ -133,6 +133,8 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.conda/
+.qgis-settings/
 env/
 venv/
 ENV/

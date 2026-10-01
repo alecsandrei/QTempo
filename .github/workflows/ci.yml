@@ -48,7 +48,6 @@ jobs:
         run: uv sync --locked
 
       - name: Pyright
-        # TODO: make blocking once the baseline errors are fixed.
         continue-on-error: true
         run: uv run pyright
 
@@ -62,4 +61,6 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Check PyQt5 to PyQt6 compatibility
-        run: pyqt5_to_pyqt6.py --dry_run qtempo
+        run: |
+          pyqt5_to_pyqt6.py --dry_run qtempo
+          pyqt5_to_pyqt6.py qtempo

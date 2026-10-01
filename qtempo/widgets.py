@@ -65,15 +65,19 @@ class JoinReportRow(t.NamedTuple):
 class JoinReportDialog(QDialog):
     """Lists the units of a matrix and whether GISCO has their boundaries."""
 
-    HEADERS = ['Label', 'Level', 'NUTS code', 'Matched']
-
     def __init__(
         self, rows: c.Sequence[JoinReportRow], parent: QWidget | None = None
     ):
         super().__init__(parent)
-        self.setWindowTitle('Join report')
-        table = QTableWidget(len(rows), len(self.HEADERS), self)
-        table.setHorizontalHeaderLabels(self.HEADERS)
+        self.setWindowTitle(self.tr('Join report'))
+        headers = [
+            self.tr('Label'),
+            self.tr('Level'),
+            self.tr('NUTS code'),
+            self.tr('Matched'),
+        ]
+        table = QTableWidget(len(rows), len(headers), self)
+        table.setHorizontalHeaderLabels(headers)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         for i, row in enumerate(rows):
             texts = (

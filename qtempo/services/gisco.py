@@ -14,6 +14,7 @@ from qgis.core import (
     QgsNetworkAccessManager,
 )
 from qgis.PyQt.QtCore import (
+    QCoreApplication,
     QUrl,
 )
 from qgis.PyQt.QtNetwork import QNetworkRequest
@@ -78,12 +79,18 @@ class GISCOService(Service):
         fields = QgsJsonUtils.stringToFields(geojson)
         if self.siruta_field not in fields.names():
             raise ServiceError(
-                f'Failed to fetch data from {self.short_name}. The SIRUTA field {self.siruta_field!r} was not found.'
+                QCoreApplication.translate(
+                    'GISCOService',
+                    'Failed to fetch data from {service}. The SIRUTA field {field} was not found.',
+                ).format(service=self.short_name, field=self.siruta_field)
             )
         features = QgsJsonUtils.stringToFeatureList(geojson, fields)
         if not features:
             raise ServiceError(
-                f'Failed to fetch data from {self.short_name}. No features were returned. Try again later.'
+                QCoreApplication.translate(
+                    'GISCOService',
+                    'Failed to fetch data from {service}. No features were returned. Try again later.',
+                ).format(service=self.short_name)
             )
         kept = []
         for feature in features:
@@ -101,8 +108,9 @@ class GISCOService(Service):
 class GISCOLAU(GISCOService):
     @property
     def full_name(self) -> str:
-        return (
-            'Geographic Information System of the Commission (GISCO) - LAU data'
+        return QCoreApplication.translate(
+            'GISCOLAU',
+            'Geographic Information System of the Commission (GISCO) - LAU data',
         )
 
     @property
@@ -129,8 +137,9 @@ class GISCOLAU(GISCOService):
 class GISCOCommunes(GISCOService):
     @property
     def full_name(self) -> str:
-        return (
-            'Geographic Information System of the Commission (GISCO) - Communes'
+        return QCoreApplication.translate(
+            'GISCOCommunes',
+            'Geographic Information System of the Commission (GISCO) - Communes',
         )
 
     @property

@@ -15,7 +15,7 @@ from qgis.core import (
     QgsNetworkAccessManager,
     QgsTask,
 )
-from qgis.PyQt.QtCore import QObject, QUrl, pyqtSignal
+from qgis.PyQt.QtCore import QCoreApplication, QObject, QUrl, pyqtSignal
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtNetwork import QNetworkReply, QNetworkRequest
 from qgis.PyQt.QtWidgets import QTableWidget
@@ -148,7 +148,10 @@ class FetchNutsIndexTask(QgsTask):
 
     def __init__(self, year: str | None = None):
         super().__init__(
-            'Fetching the GISCO NUTS index', QgsTask.Flag.CanCancel
+            QCoreApplication.translate(
+                'FetchNutsIndexTask', 'Fetching the GISCO NUTS index'
+            ),
+            QgsTask.Flag.CanCancel,
         )
         self.year = year
         self.years: list[str] = []
@@ -181,7 +184,10 @@ class FetchUnitTask(QgsTask):
 
     def __init__(self, unit: Unit):
         super().__init__(
-            f'Fetching {unit.to_filename()}', QgsTask.Flag.CanCancel
+            QCoreApplication.translate(
+                'FetchUnitTask', 'Fetching {filename}'
+            ).format(filename=unit.to_filename()),
+            QgsTask.Flag.CanCancel,
         )
         self.unit = unit
         self.fields = QgsFields()
@@ -197,7 +203,11 @@ class FetchUnitTask(QgsTask):
                 geojson, self.fields
             )
             if not self.features:
-                raise ServiceError(f'No features in {self.unit.url}')
+                raise ServiceError(
+                    QCoreApplication.translate(
+                        'FetchUnitTask', 'No features in {url}'
+                    ).format(url=self.unit.url)
+                )
         except Exception as e:
             self.error = str(e)
         return not self.isCanceled()
@@ -219,7 +229,6 @@ class BoundaryDownloader(QObject):
     unit, and shows the progress of each download in a table."""
 
     finished = pyqtSignal(object)
-    HEADERS = ['ID', 'URL', 'Error']
 
     def __init__(
         self,
@@ -240,9 +249,10 @@ class BoundaryDownloader(QObject):
         return not self.cancelled and len(self.done) < len(self.tasks)
 
     def start(self) -> None:
+        headers = ['ID', 'URL', self.tr('Error')]
         self.table.clear()
-        self.table.setColumnCount(len(self.HEADERS))
-        self.table.setHorizontalHeaderLabels(self.HEADERS)
+        self.table.setColumnCount(len(headers))
+        self.table.setHorizontalHeaderLabels(headers)
         self.table.setRowCount(len(self.units))
         manager = QgsApplication.taskManager()
         assert manager is not None
@@ -266,7 +276,7 @@ class BoundaryDownloader(QObject):
         task = self.tasks[row]
         error = task.error
         if error is None and task.status() != QgsTask.TaskStatus.Complete:
-            error = 'Cancelled'
+            error = self.tr('Cancelled')
         if error is None:
             if not self.boundaries.fields.count():
                 self.boundaries.fields = task.fields

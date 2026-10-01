@@ -317,9 +317,7 @@ def test_a_failed_table_of_contents_is_fetched_again(
     dialog = plugin.dialog
     wait_until(dialog.treeWidgetTableOfContents.isEnabled)
     assert [type(error) for error in errors] == [RequestError]
-    assert [item.title() for item in dialog.messageBar.items()] == [
-        'RequestError'
-    ]
+    assert [item.title() for item in dialog.messageBar.items()] == ['Error']
     plugin.run()
     assert len(requests(plugin)) == 2
 

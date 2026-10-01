@@ -17,7 +17,7 @@
    </sizepolicy>
   </property>
   <property name="windowTitle">
-   <string>QTempo</string>
+   <string notr="true">QTempo</string>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout_4">
    <item>
@@ -249,7 +249,7 @@
            <item row="2" column="0">
             <widget class="QgsCollapsibleGroupBox" name="mGroupBoxGisco">
              <property name="title">
-              <string>GISCO NUTS</string>
+              <string notr="true">GISCO NUTS</string>
              </property>
              <layout class="QGridLayout" name="gridLayout_8">
               <item row="0" column="0">
@@ -358,7 +358,7 @@
        <item>
         <widget class="QCheckBox" name="checkBoxEnglish">
          <property name="text">
-          <string>English</string>
+          <string notr="true">English</string>
          </property>
          <property name="autoExclusive">
           <bool>true</bool>
@@ -368,7 +368,7 @@
        <item>
         <widget class="QCheckBox" name="checkBoxRomanian">
          <property name="text">
-          <string>Romanian</string>
+          <string notr="true">Română</string>
          </property>
          <property name="checked">
           <bool>true</bool>

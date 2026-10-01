@@ -16,6 +16,7 @@ from qgis.core import (
     QgsFields,
     QgsNetworkAccessManager,
     QgsProject,
+    QgsSettings,
     QgsTask,
     QgsVectorLayer,
 )
@@ -28,11 +29,13 @@ from qgis.gui import (
 from qgis.PyQt import sip, uic
 from qgis.PyQt.QtCore import (
     QAbstractTableModel,
+    QCoreApplication,
     QModelIndex,
     QObject,
     QSignalBlocker,
     Qt,
     QTimer,
+    QTranslator,
     QUrl,
 )
 from qgis.PyQt.QtGui import QIcon
@@ -42,6 +45,7 @@ from qgis.PyQt.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDialogButtonBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -77,6 +81,7 @@ from .enums import (
     Level,
     QListWidgetItemRole,
     QTreeWidgetItemRole,
+    Setting,
     Tabs,
     WidgetProperty,
 )
@@ -117,6 +122,11 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.request_handler = RequestHandler(self.qtempo.network_manager, self)
         self.progress_item: QgsMessageBarItem | None = None
         self.focus_widget: QWidget | None = None
+        # Deleting the dialog uninstalls it
+        self.translator = QTranslator(self)
+        language = self.load_language()
+        self.checkBoxEnglish.setChecked(language == 'en')
+        self.checkBoxRomanian.setChecked(language == 'ro')
 
         # signals
         self.treeWidgetTableOfContents.itemSelectionChanged.connect(
@@ -162,6 +172,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.mGroupBoxTableOptions.setVisible(False)
         self.treeWidgetTableOfContents.setHeaderLabel('')
         self.add_services()
+        self.set_language(language)
 
     def _cast_types(self):
         # no need to call this function
@@ -220,6 +231,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             QTableWidget, self.tableWidgetDownloads
         )
         self.messageBar = t.cast(QgsMessageBar, self.messageBar)
+        self.buttonBox = t.cast(QDialogButtonBox, self.buttonBox)
 
     def display_dialog(self) -> None:
         """Shows the dialog, or brings it back above QGIS if it is already
@@ -300,7 +312,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         return url if lang == 'ro' else urljoin(url, f'?lang={lang}')
 
     def fetch_table_of_contents(self) -> QNetworkReply:
-        text = 'Fetching the table of contents'
+        text = self.tr('Fetching the table of contents')
         request = QNetworkRequest(QUrl(self.preprocess_url(URL.TOC.value)))
         self.table_of_contents_reply = self.request_handler.get(request, text)
         if self.treeWidgetTableOfContents.topLevelItemCount():
@@ -317,6 +329,37 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         elif self.checkBoxRomanian.checkState() == Qt.CheckState.Checked:
             return 'ro'
         raise ValueError('unreachable')
+
+    def load_language(self) -> Language:
+        """The saved language, else Romanian if QGIS is in Romanian."""
+        language = QgsSettings().value(Setting.LANGUAGE.value)
+        if language in ('en', 'ro'):
+            return language
+        return 'ro' if QgsApplication.locale().startswith('ro') else 'en'
+
+    def set_language(self, language: Language) -> None:
+        """Translates the dialog. The TEMPO data is fetched separately."""
+        QCoreApplication.removeTranslator(self.translator)
+        self.translator.load(f'QTempo_{language}', Asset.I18N.value.as_posix())
+        QCoreApplication.installTranslator(self.translator)
+        self.retranslate()
+
+    def retranslate(self) -> None:
+        self.retranslateUi(self)
+        # Qt translates the standard buttons in the language of QGIS
+        buttons = {
+            QDialogButtonBox.StandardButton.Ok: self.tr('OK'),
+            QDialogButtonBox.StandardButton.Cancel: self.tr('Cancel'),
+        }
+        for button, text in buttons.items():
+            push_button = self.buttonBox.button(button)
+            assert push_button is not None
+            push_button.setText(text)
+        for item in get_list_widget_items(self.listWidgetServices):
+            service = t.cast(
+                services.Service, item.data(QListWidgetItemRole.SERVICE.value)
+            )
+            item.setText(service.full_name)
 
     def switch_language_table_of_contents(self):
         nodes = t.cast(
@@ -353,7 +396,9 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             self.preprocess_url(
                 URL.CONTEXT.value.format(code=node['context']['code'])
             ),
-            f'Loading matrices for {parse_node_name(node["context"]["name"])}',
+            self.tr('Loading the matrices of {name}').format(
+                name=parse_node_name(node['context']['name'])
+            ),
         )
 
         def find_child(context: Context) -> Context:
@@ -387,6 +432,9 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                 )
 
     def handle_changed_language(self):
+        language = self.get_language()
+        QgsSettings().setValue(Setting.LANGUAGE.value, language)
+        self.set_language(language)
         self.fetch_table_of_contents()
 
     def filter_toc(
@@ -451,7 +499,9 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             self.preprocess_url(
                 URL.CONTEXT.value.format(code=node['context']['code'])
             ),
-            f'Loading matrices for {selected_dataset.text(0)!r}',
+            self.tr('Loading the matrices of {name}').format(
+                name=selected_dataset.text(0)
+            ),
         )
 
         def add_items():
@@ -485,7 +535,10 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             )
         )
         return self.request_handler.get(
-            request, f'Fetching information for {dataset_code!r}'
+            request,
+            self.tr('Fetching the information of {code}').format(
+                code=dataset_code
+            ),
         )
 
     def clear_table(self) -> None:
@@ -574,7 +627,10 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             QUrl(URL.DATASET.value.format(code=dataset_code))
         )
         reply = self.request_handler.get(
-            request, f'Fetching information for {dataset_code!r}'
+            request,
+            self.tr('Fetching the information of {code}').format(
+                code=dataset_code
+            ),
         )
 
         def set_leaf_node_ro():
@@ -734,7 +790,9 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             )
             combo_box = QComboBox(self.frameTableOptions)
             add_completer_to_combo_box(combo_box)
-            combo_box.setToolTip('Leave empty to show every value as a column.')
+            combo_box.setToolTip(
+                self.tr('Leave empty to show every value as a column.')
+            )
             combo_box.addItem('', None)
             for value in matrix.distinct(field_):
                 combo_box.addItem(value, value)
@@ -783,11 +841,9 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         if old_model is not None:
             old_model.deleteLater()
         self.tableViewMatrix.resizeColumnsToContents()
-        rows, columns = len(shown.data), len(shown.fields)
-        self.labelTableSummary.setText(
-            f'{rows} row{"s" * (rows != 1)} × '
-            f'{columns} column{"s" * (columns != 1)}'
-        )
+        rows = self.tr('%n row(s)', '', len(shown.data))
+        columns = self.tr('%n column(s)', '', len(shown.fields))
+        self.labelTableSummary.setText(f'{rows} × {columns}')
 
     def get_map_levels(self, matrix: Matrix) -> list[Level]:
         """The levels to map, one layer each. The national total is only
@@ -806,8 +862,8 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         levels = self.get_map_levels(data)
         counts = []
         for level in levels:
-            count = len(data.get_units(level))
-            counts.append(f'{level.label}: {count} unit{"s" * (count != 1)}')
+            units = self.tr('%n unit(s)', '', len(data.get_units(level)))
+            counts.append(f'{level.label}: {units}')
         self.labelMapLevels.setText(', '.join(counts))
         is_nuts = levels[0].is_nuts
         self.mGroupBoxServices.setVisible(not is_nuts)
@@ -833,7 +889,8 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         if task.exception is not None:
             message_bar = self.get_message_bar()
             message_bar.pushCritical(
-                'Failed to fetch the GISCO NUTS index', str(task.exception)
+                self.tr('Failed to fetch the GISCO NUTS index'),
+                str(task.exception),
             )
             return None
         if task.status() == QgsTask.TaskStatus.Complete:
@@ -872,7 +929,8 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.load_nuts_index()
         message_bar = self.get_message_bar()
         message_bar.pushWarning(
-            'GISCO', 'The NUTS index is still loading. Try again shortly.'
+            'GISCO',
+            self.tr('The NUTS index is still loading. Try again shortly.'),
         )
 
     def validate_join(self) -> None:
@@ -888,17 +946,17 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             for unit in matrix.get_units(level)
         ]
         matched = sum(row.matched for row in report)
-        text = (
-            f'{matched} of {len(report)} units are in '
-            f'NUTS {self.comboBoxGiscoYear.currentText()}.'
-        )
+        text = self.tr(
+            '{matched} of %n unit(s) are in NUTS {year}.', '', len(report)
+        ).format(matched=matched, year=self.comboBoxGiscoYear.currentText())
         unresolved = matrix.unresolved_labels
         if unresolved:
             report.extend(
                 JoinReportRow(label, '', '', False) for label in unresolved
             )
-            count = len(unresolved)
-            text += f' {count} label{"s" * (count != 1)} could not be mapped.'
+            text += ' ' + self.tr(
+                '%n label(s) could not be mapped.', '', len(unresolved)
+            )
         self.join_report = report
         self.labelJoinStatus.setText(text)
         self.pushButtonJoinReport.setEnabled(True)
@@ -935,7 +993,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                 QNetworkRequest.KnownHeaders.ContentTypeHeader,
                 'application/json',
             )
-            text = f'Fetching data for {code}'
+            text = self.tr('Fetching the data of {code}').format(code=code)
             if len(bodies) > 1:
                 text += f' ({len(responses) + 1}/{len(bodies)})'
             reply = self.request_handler.post(
@@ -949,8 +1007,9 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             if reply.error() != QNetworkReply.NetworkError.NoError:  # pyright: ignore[reportCallIssue]
                 self.qtempo._handle_error_signal(
                     RequestError(
-                        f'Failed to fetch the data for {code}: '
-                        f'{reply.errorString()}'
+                        self.tr(
+                            'Failed to fetch the data of {code}: {error}'
+                        ).format(code=code, error=reply.errorString())
                     )
                 )
                 return None
@@ -1000,10 +1059,12 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         service = t.cast(
             services.Service, items[0].data(QListWidgetItemRole.SERVICE.value)
         )
-        information = QLabel(f"""
-            name: {service.full_name}<br>
-            url: <a href=\"{service.url}\">{service.url}</a>
-            """)
+        information = QLabel(
+            self.tr('Name: {name}<br>URL: {url}').format(
+                name=service.full_name,
+                url=f'<a href="{service.url}">{service.url}</a>',
+            )
+        )
         information.setTextFormat(Qt.TextFormat.RichText)
         information.setTextInteractionFlags(
             Qt.TextInteractionFlag.LinksAccessibleByMouse  # pyright: ignore[reportArgumentType]
@@ -1045,7 +1106,9 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             self.localities_task is not None
         ):
             message_bar = self.get_message_bar()
-            message_bar.pushInfo('QTempo', 'A download is already running.')
+            message_bar.pushInfo(
+                'QTempo', self.tr('A download is already running.')
+            )
         elif levels[0].is_nuts:
             self.add_nuts_layers(matrix, levels)
         else:
@@ -1087,13 +1150,19 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         if not boundaries.features:
             message_bar.pushCritical(
                 'GISCO',
-                'No boundaries were downloaded. See the errors in the download table.',
+                self.tr(
+                    'No boundaries were downloaded. See the errors in the download table.'
+                ),
             )
             return None
         if boundaries.errors:
             message_bar.pushWarning(
                 'GISCO',
-                f'{len(boundaries.errors)} boundaries failed to download. See the errors in the download table.',
+                self.tr(
+                    '%n boundary(ies) failed to download. See the errors in the download table.',
+                    '',
+                    len(boundaries.errors),
+                ),
             )
         self.add_layers(
             [
@@ -1131,7 +1200,9 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         message_bar = self.get_message_bar()
         message_bar.pushInfo(
             service.short_name,
-            'Downloading the boundaries. The layer is added when the download finishes.',
+            self.tr(
+                'Downloading the boundaries. The layer is added when the download finishes.'
+            ),
         )
 
     def add_localities_boundaries(
@@ -1217,7 +1288,9 @@ class FetchLocalitiesTask(QgsTask):
 
     def __init__(self, service: services.Service, units: list[TerritorialUnit]):
         super().__init__(
-            f'Fetching boundaries from {service.short_name}',
+            QCoreApplication.translate(
+                'FetchLocalitiesTask', 'Fetching the boundaries from {service}'
+            ).format(service=service.short_name),
             QgsTask.Flag.CanCancel,
         )
         self.service = service
@@ -1355,13 +1428,18 @@ class QTempo:
 
     def _handle_error_signal(self, error: Exception) -> None:
         message_bar = self.dialog.get_message_bar()
-        message_bar.pushCritical(error.__class__.__name__, str(error))
+        message_bar.pushCritical(
+            QCoreApplication.translate('QTempo', 'Error'), str(error)
+        )
         raise error
 
     def _handle_table_of_contents_error(self):
         self._handle_error_signal(
             RequestError(
-                'Error occured when trying to fetch the table of contents. Check your internet connection and try again.'
+                QCoreApplication.translate(
+                    'QTempo',
+                    'Failed to fetch the table of contents. Check your internet connection and try again.',
+                )
             )
         )
 

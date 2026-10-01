@@ -14,6 +14,11 @@ GISCO_NUTS_URL = 'https://gisco-services.ec.europa.eu/distribution/v2/nuts/'
 class Asset(Enum):
     ICON = _ASSETS_DIR / 'icon.ico'
     DIALOG = _ASSETS_DIR / 'ui' / 'dialog.ui'
+    I18N = Path(__file__).parent / 'i18n'
+
+
+class Setting(Enum):
+    LANGUAGE = 'QTempo/language'
 
 
 class URL(Enum):
@@ -56,11 +61,19 @@ class Level(Enum):
     @property
     def label(self) -> str:
         return {
-            Level.COUNTRY: 'Country',
-            Level.MACROREGION: 'Macroregions',
-            Level.REGION: 'Regions',
-            Level.COUNTY: 'Counties',
-            Level.LOCALITY: 'Localities',
+            Level.COUNTRY: QtCore.QCoreApplication.translate(
+                'Level', 'Country'
+            ),
+            Level.MACROREGION: QtCore.QCoreApplication.translate(
+                'Level', 'Macroregions'
+            ),
+            Level.REGION: QtCore.QCoreApplication.translate('Level', 'Regions'),
+            Level.COUNTY: QtCore.QCoreApplication.translate(
+                'Level', 'Counties'
+            ),
+            Level.LOCALITY: QtCore.QCoreApplication.translate(
+                'Level', 'Localities'
+            ),
         }[self]
 
     @property

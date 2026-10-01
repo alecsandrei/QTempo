@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import collections.abc as c
+import itertools
 import json
 import textwrap
 import typing as t
@@ -103,6 +104,9 @@ from .widgets import (
 )
 
 UI_Dialog = uic.loadUiType(Asset.DIALOG.value.as_posix())[0]
+
+# The pivot service returns no data for a dimension with more options
+MAX_QUERY_OPTIONS = 1000
 
 
 class Dialog(QDialog, UI_Dialog):  # type: ignore
@@ -655,9 +659,12 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                 has_parent = False
             list_widget.setMinimumWidth(list_widget.width() + 5)
 
-    def construct_query(self) -> str:
+    def construct_queries(self) -> list[str]:
+        """The encoded queries of the selected options. A dimension with
+        more than MAX_QUERY_OPTIONS selected options is split between
+        several queries."""
         list_widgets = get_children(self.frameQuery, QListWidget)
-        query: list[str] = []
+        dimensions: list[list[str]] = []
         for list_widget in list_widgets:
             choices = t.cast(
                 list[Choice],
@@ -666,12 +673,16 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                     for selected_item in list_widget.selectedItems()
                 ],
             )
-            query.append(
-                ','.join([str(choice['nomItemId']) for choice in choices])
+            ids = [str(choice['nomItemId']) for choice in choices]
+            dimensions.append(
+                [
+                    ','.join(ids[i : i + MAX_QUERY_OPTIONS])
+                    for i in range(0, len(ids), MAX_QUERY_OPTIONS)
+                ]
             )
-        return ':'.join(query)
+        return [':'.join(query) for query in itertools.product(*dimensions)]
 
-    def construct_body(self) -> RequestBody | None:
+    def construct_body(self, query: str) -> RequestBody:
         current_item = self.listWidgetMatrices.currentItem()
         assert current_item
         leaf_node = t.cast(
@@ -681,7 +692,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             RequestBody,
             {
                 'language': self.get_language(),
-                'encQuery': self.construct_query(),
+                'encQuery': query,
                 'matCode': self.get_matrix_code(),
                 **leaf_node['details'],
             },
@@ -908,39 +919,64 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.activateWindow()
 
     def fetch_data(self) -> None:
-        body = self.construct_body()
-        if body is None:
-            return
+        """Sends the queries one after another and shows their merged
+        data."""
+        code = self.get_matrix_code()
+        bodies = [
+            self.construct_body(query) for query in self.construct_queries()
+        ]
+        responses: list[bytes] = []
 
-        request = QNetworkRequest(QUrl(self.preprocess_url(URL.TABLE.value)))
-        request.setHeader(
-            QNetworkRequest.KnownHeaders.ContentTypeHeader, 'application/json'
-        )
-        reply = self.request_handler.post(
-            request,
-            json.dumps(body).encode('UTF-8'),
-            f'Fetching data for {self.get_matrix_code()}',
-        )
+        def post() -> None:
+            request = QNetworkRequest(
+                QUrl(self.preprocess_url(URL.TABLE.value))
+            )
+            request.setHeader(
+                QNetworkRequest.KnownHeaders.ContentTypeHeader,
+                'application/json',
+            )
+            text = f'Fetching data for {code}'
+            if len(bodies) > 1:
+                text += f' ({len(responses) + 1}/{len(bodies)})'
+            reply = self.request_handler.post(
+                request,
+                json.dumps(bodies[len(responses)]).encode('UTF-8'),
+                text,
+            )
+            reply.finished.connect(partial(handle_reply, reply))
 
-        def set_matrix():
+        def handle_reply(reply: QNetworkReply) -> None:
+            if reply.error() != QNetworkReply.NetworkError.NoError:  # pyright: ignore[reportCallIssue]
+                self.qtempo._handle_error_signal(
+                    RequestError(
+                        f'Failed to fetch the data for {code}: '
+                        f'{reply.errorString()}'
+                    )
+                )
+                return None
+            responses.append(reply.readAll().data())  # pyright: ignore[reportArgumentType]
+            if len(responses) < len(bodies):
+                post()
+            else:
+                set_matrix()
+
+        def set_matrix() -> None:
             current_item = self.listWidgetMatrices.currentItem()
             assert current_item
             current_item.setData(
                 QListWidgetItemRole.MATRIX.value,
                 Matrix.from_response(
-                    reply.readAll().data(),  # pyright: ignore[reportArgumentType]
-                    body,
+                    Matrix.merge_responses(responses),
+                    bodies[0],
                     current_item.data(QListWidgetItemRole.LEAF_NODE.value),
                     current_item.data(QListWidgetItemRole.LEAF_NODE_RO.value),
                 ),
             )
+            self.handle_map_tab()
+            self.update_table()
+            self.pushButtonAddTableLayer.setEnabled(True)
 
-        reply.finished.connect(set_matrix)
-        reply.finished.connect(self.handle_map_tab)
-        reply.finished.connect(self.update_table)
-        reply.finished.connect(
-            lambda: self.pushButtonAddTableLayer.setEnabled(True)
-        )
+        post()
 
     def clear_table_options(self) -> None:
         delete_layout_items(self.frameTableOptions.layout())

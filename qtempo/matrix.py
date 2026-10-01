@@ -226,6 +226,15 @@ class Matrix(c.Mapping):
                 data[columns[i]].append(value)
         return data
 
+    @staticmethod
+    def merge_responses(responses: c.Sequence[bytes]) -> bytes:
+        """Joins the rows of the responses to the queries of one matrix,
+        which share the header."""
+        lines = responses[0].splitlines()[:1]
+        for response in responses:
+            lines.extend(response.splitlines()[1:])
+        return b'\n'.join(lines)
+
     @classmethod
     def from_response(
         cls,

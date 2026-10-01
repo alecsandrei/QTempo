@@ -284,7 +284,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             self, f'Fetching table of contents in the {language} language.'
         )
         reply = self.fetch_table_of_contents()
-        reply.finished.connect(loading_dialog.close)
+        reply.finished.connect(loading_dialog.close)  # pyright: ignore[reportArgumentType]
         reply.finished.connect(loading_label.requestInterruption)
         reply.finished.connect(self.enable_gui)
 
@@ -410,7 +410,9 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         def switch_language():
             leaf_node = t.cast(LeafNode, json.loads(reply.readAll().data()))
             self.add_leaf_node_to_list_widget_item(leaf_node)
-            layouts = get_children(self.frameQuery.layout(), QVBoxLayout)
+            frame_layout = self.frameQuery.layout()
+            assert frame_layout is not None
+            layouts = get_children(frame_layout, QVBoxLayout)
             for layout in layouts:
                 list_widget = get_widgets(layout, QListWidgetAlwaysSelected)[0]
                 label = get_widgets(layout, QLabel)[0]
@@ -445,7 +447,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                 leaf_node,
             )
 
-    def add_queries(self) -> None | QNetworkReply:
+    def add_queries(self) -> None:
         self.tabWidgetMatrix.setCurrentIndex(Tabs.QUERY.value)
         self.clear_table()
         self.disable_gui()
@@ -461,10 +463,8 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         if reply is not None:
             reply.finished.connect(add_dimensions)
             reply.finished.connect(self.enable_gui)
-            return reply
         else:
             self.enable_gui()
-            return None
 
     def set_query_children_hidden(self) -> None:
         parent_widget = t.cast(QListWidget, self.sender())
@@ -617,10 +617,10 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         )
         self.tabWidgetMatrix.setTabEnabled(Tabs.MAP.value, data.has_siruta)
 
-    def fetch_data(self) -> QNetworkReply | None:
+    def fetch_data(self) -> None:
         body = self.construct_body()
         if body is None:
-            return None
+            return
 
         request = QNetworkRequest(QUrl(self.preprocess_url(URL.TABLE.value)))
         request.setHeader(
@@ -638,7 +638,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             assert current_item
             current_item.setData(
                 QListWidgetItemRole.MATRIX.value,
-                Matrix.from_response(reply.readAll().data(), body),
+                Matrix.from_response(reply.readAll().data(), body),  # pyright: ignore[reportArgumentType]
             )
 
         reply.finished.connect(set_matrix)
@@ -648,7 +648,6 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             lambda: self.pushButtonAddTableLayer.setEnabled(True)
         )
         reply.finished.connect(self.enable_gui)
-        return reply
 
     def clear_table_options(self) -> None:
         delete_layout_items(self.frameTableOptions.layout())
@@ -681,7 +680,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             """)
         information.setTextFormat(Qt.TextFormat.RichText)
         information.setTextInteractionFlags(
-            Qt.TextInteractionFlag.LinksAccessibleByMouse
+            Qt.TextInteractionFlag.LinksAccessibleByMouse  # pyright: ignore[reportArgumentType]
             | Qt.TextInteractionFlag.TextSelectableByMouse
         )
         information.setOpenExternalLinks(True)
@@ -744,7 +743,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             f'Fetching data from service {handler.service.short_name}',
         )
         handler.error_ocurred.connect(self.qtempo._handle_error_signal)
-        handler.finished.connect(loading_dialog.close)
+        handler.finished.connect(loading_dialog.close)  # pyright: ignore[reportArgumentType]
         handler.finished.connect(loading_label.requestInterruption)
         handler.finished.connect(self.enable_gui)
         handler.start()
@@ -800,23 +799,22 @@ class ServiceHandler(QThread):
         service_layer = self.service.get_layer(
             [siruta for siruta in grouped_matrix.siruta if siruta is not None]
         )
-        processing_result = t.cast(
-            QgsVectorLayer,
-            processing.run(
-                'native:joinattributestable',
-                {
-                    'INPUT': service_layer,
-                    'FIELD': self.service.siruta_field,
-                    'INPUT_2': matrix,
-                    'FIELD_2': self.dialog.get_siruta_field_name(),
-                    'FIELDS_TO_COPY': [],
-                    'METHOD': 1,
-                    'DISCARD_NONMATCHING': True,
-                    'PREFIX': '',
-                    'OUTPUT': 'TEMPORARY_OUTPUT',
-                },
-            )['OUTPUT'],
+        results = processing.run(  # pyright: ignore[reportAttributeAccessIssue]
+            'native:joinattributestable',
+            {
+                'INPUT': service_layer,
+                'FIELD': self.service.siruta_field,
+                'INPUT_2': matrix,
+                'FIELD_2': self.dialog.get_siruta_field_name(),
+                'FIELDS_TO_COPY': [],
+                'METHOD': 1,
+                'DISCARD_NONMATCHING': True,
+                'PREFIX': '',
+                'OUTPUT': 'TEMPORARY_OUTPUT',
+            },
         )
+        assert results is not None
+        processing_result = t.cast(QgsVectorLayer, results['OUTPUT'])
 
         processing_result.setName(
             f'{self.service.short_name} [{self.dialog.get_matrix_code()}]'
@@ -913,12 +911,14 @@ class RequestHandler:
     ) -> QNetworkReply:
         self.show_dialog(text)
         reply = self.manager.post(request, data)
+        assert reply is not None
         reply.finished.connect(self.close_dialog)
         return reply
 
     def get(self, request: QNetworkRequest, text: str) -> QNetworkReply:
         self.show_dialog(text)
         reply = self.manager.get(request)
+        assert reply is not None
         reply.finished.connect(self.close_dialog)
         return reply
 

@@ -29,7 +29,7 @@ if t.TYPE_CHECKING:
 def request(url: str) -> bytes:
     network = QgsNetworkAccessManager()
     request = QNetworkRequest(QUrl(url))
-    return network.blockingGet(request).content().data()
+    return network.blockingGet(request).content().data()  # pyright: ignore[reportReturnType]
 
 
 def request_datasets(url: str) -> dict[str, GISCO_T.DatasetDetails]:

@@ -21,13 +21,17 @@ class QListWidgetAlwaysSelected(QListWidget):
     def __init__(self, parent: QWidget):
         super().__init__(parent)
         self.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
-        self.model().rowsInserted.connect(self._select_first_row)
+        model = self.model()
+        assert model is not None
+        model.rowsInserted.connect(self._select_first_row)
 
     def _select_first_row(
         self, index: QModelIndex, first: int, last: int
     ) -> None:
         self.setCurrentRow(first)
-        self.model().rowsInserted.disconnect()
+        model = self.model()
+        assert model is not None
+        model.rowsInserted.disconnect()
 
     def _get_first_visible_item(self) -> QListWidgetItem | None:
         for item in get_list_widget_items(self):
@@ -59,7 +63,7 @@ class LoadingDialog(QDialog):
         self.label = QLabel(self)
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.setFont(QFont(self.label.font().family(), 15))
-        self.layout().addWidget(self.label)
+        layout.addWidget(self.label)
 
     def update_loading_label(self, text: str) -> None:
         self.label.setText(text)

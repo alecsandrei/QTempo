@@ -33,9 +33,9 @@ def sort_nodes(nodes: list[Node]) -> None:
 def add_completer_to_combo_box(combobox: QComboBox) -> None:
     combobox.setEditable(True)
     combobox.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-    combobox.completer().setCompletionMode(
-        QCompleter.CompletionMode.PopupCompletion
-    )
+    completer = combobox.completer()
+    assert completer is not None
+    completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
     combobox.setCurrentIndex(-1)
 
 
@@ -43,6 +43,7 @@ def delete_layout_items(layout: QLayout | None) -> None:
     if layout is not None:
         while layout.count():
             item = layout.takeAt(0)
+            assert item is not None
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
@@ -74,7 +75,9 @@ def get_children(parent: QWidget | QLayout, search_for: t.Type[T]) -> list[T]:
 def get_widgets(parent: QLayout, search_for: t.Type[T]) -> list[T]:
     widgets = []
     for i in range(parent.count()):
-        item = parent.itemAt(i).widget()
+        layout_item = parent.itemAt(i)
+        assert layout_item is not None
+        item = layout_item.widget()
         if item is not None and isinstance(item, search_for):
             widgets.append(item)
     return widgets

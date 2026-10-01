@@ -46,7 +46,7 @@ class ANCPI(Service):
         return False
 
     def handle_reply(self, reply: QgsNetworkReplyContent) -> QgsVectorLayer:
-        geojson = reply.content().data().decode(encoding='UTF-8')
+        geojson = reply.content().data().decode(encoding='UTF-8')  # pyright: ignore[reportAttributeAccessIssue]
         layer = QgsVectorLayer('MultiPolygon', self.short_name, 'memory')
         fields = QgsJsonUtils.stringToFields(geojson)
         features = QgsJsonUtils.stringToFeatureList(geojson, fields)

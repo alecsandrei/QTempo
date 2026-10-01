@@ -164,13 +164,13 @@ class Matrix(c.Mapping):
         provider = layer.dataProvider()
         attributes = QgsFields()
         for field_ in self.fields:
-            variant = QVariant.Double if field_.is_value else QVariant.String
+            variant = QVariant.Double if field_.is_value else QVariant.String  # pyright: ignore[reportAttributeAccessIssue]
             attributes.append(QgsField(field_.name, variant))
         if self.has_siruta:
             attributes.append(
                 QgsField(
                     siruta_field_name if siruta_field_name is not None else '',
-                    QVariant.String,
+                    QVariant.String,  # pyright: ignore[reportAttributeAccessIssue]
                 )
             )
         if provider is None:

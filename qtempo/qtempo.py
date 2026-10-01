@@ -679,7 +679,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             name: {service.full_name}<br>
             url: <a href=\"{service.url}\">{service.url}</a>
             """)
-        information.setTextFormat(Qt.RichText)
+        information.setTextFormat(Qt.TextFormat.RichText)
         information.setTextInteractionFlags(
             Qt.TextInteractionFlag.LinksAccessibleByMouse
             | Qt.TextInteractionFlag.TextSelectableByMouse
@@ -690,7 +690,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         layout.addWidget(information)
         dialog.setWindowTitle(service.short_name)
         dialog.setLayout(layout)
-        dialog.exec_()
+        dialog.exec()
 
     def add_services(self) -> None:
         self.mGroupBoxServices.setLayout(QVBoxLayout())

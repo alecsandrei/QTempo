@@ -6,8 +6,10 @@ import typing as t
 
 from qgis.PyQt.QtCore import (
     QObject,
+    QSignalBlocker,
     QUrl,
 )
+from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtNetwork import QNetworkReply, QNetworkRequest
 from qgis.PyQt.QtWidgets import (
     QComboBox,
@@ -15,6 +17,8 @@ from qgis.PyQt.QtWidgets import (
     QLayout,
     QListWidget,
     QListWidgetItem,
+    QTableWidget,
+    QTableWidgetItem,
     QTreeWidget,
     QTreeWidgetItem,
     QWidget,
@@ -37,6 +41,17 @@ def add_completer_to_combo_box(combobox: QComboBox) -> None:
     assert completer is not None
     completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
     combobox.setCurrentIndex(-1)
+
+
+def set_combo_box_items(
+    combo_box: QComboBox, items: list[str], default: str
+) -> None:
+    """Replaces the items, keeping the current one if it is still there."""
+    current = combo_box.currentText() or default
+    with QSignalBlocker(combo_box):
+        combo_box.clear()
+        combo_box.addItems(items)
+        combo_box.setCurrentText(current)
 
 
 def delete_layout_items(layout: QLayout | None) -> None:
@@ -135,3 +150,18 @@ def get_tree_widget_items_r(
         for child in children:
             items.extend(get_tree_widget_items_r(child))
     return items
+
+
+def get_table_item(
+    table: QTableWidget, row: int, column: int
+) -> QTableWidgetItem:
+    item = table.item(row, column)
+    if item is None:
+        item = QTableWidgetItem()
+        table.setItem(row, column, item)
+    return item
+
+
+def color_row(table: QTableWidget, row: int, color: QColor) -> None:
+    for column in range(table.columnCount()):
+        get_table_item(table, row, column).setBackground(color)

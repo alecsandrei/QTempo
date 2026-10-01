@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections.abc as c
 import datetime
 import json
 import typing as t
@@ -8,10 +9,9 @@ from urllib.parse import urljoin
 
 from qgis.core import (
     QgsFeature,
+    QgsFields,
     QgsJsonUtils,
     QgsNetworkAccessManager,
-    QgsVectorLayer,
-    edit,
 )
 from qgis.PyQt.QtCore import (
     QUrl,
@@ -23,7 +23,7 @@ from ..exceptions import ServiceError
 from .abc import Service
 
 if t.TYPE_CHECKING:
-    from ..matrix import SIRUTA
+    from ..units import TerritorialUnit
 
 
 def request(url: str) -> bytes:
@@ -66,7 +66,39 @@ def get_most_recent_dataset(url: str) -> str:
     )
 
 
-class GISCOLAU(Service):
+class GISCOService(Service):
+    def process_siruta_value(self, siruta: str) -> str:
+        return siruta
+
+    def get_features(
+        self, units: c.Collection[TerritorialUnit]
+    ) -> tuple[QgsFields, list[QgsFeature]]:
+        codes = {unit.code for unit in units}
+        geojson = get_most_recent_dataset(self.url)
+        fields = QgsJsonUtils.stringToFields(geojson)
+        if self.siruta_field not in fields.names():
+            raise ServiceError(
+                f'Failed to fetch data from {self.short_name}. The SIRUTA field {self.siruta_field!r} was not found.'
+            )
+        features = QgsJsonUtils.stringToFeatureList(geojson, fields)
+        if not features:
+            raise ServiceError(
+                f'Failed to fetch data from {self.short_name}. No features were returned. Try again later.'
+            )
+        kept = []
+        for feature in features:
+            if feature.attribute('CNTR_CODE') != 'RO':
+                continue
+            code = self.process_siruta_value(
+                str(feature.attribute(self.siruta_field))
+            )
+            if code in codes:
+                feature.setAttribute(self.siruta_field, code)
+                kept.append(feature)
+        return fields, kept
+
+
+class GISCOLAU(GISCOService):
     @property
     def full_name(self) -> str:
         return (
@@ -93,42 +125,8 @@ class GISCOLAU(Service):
         # Schema, as of 22 july 2025, is RO_98505
         return siruta.split('_')[-1]
 
-    def get_layer(self, siruta: list[SIRUTA]) -> QgsVectorLayer:
-        siruta_codes = [value.code for value in siruta]
 
-        def keep_feature(feature: QgsFeature) -> bool:
-            return (
-                feature.attribute(self.siruta_field) in siruta_codes
-                and feature.attribute('CNTR_CODE') == 'RO'
-            )
-
-        geojson = get_most_recent_dataset(self.url)
-        layer = QgsVectorLayer('MultiPolygon', self.short_name, 'memory')
-        fields = QgsJsonUtils.stringToFields(geojson)
-        if all(field_.name() != self.siruta_field for field_ in fields):
-            raise ServiceError(
-                f'Failed to fetch data from {self.short_name}. The SIRUTA field {self.siruta_field!r} was not found.'
-            )
-        features = QgsJsonUtils.stringToFeatureList(geojson, fields)
-        for feature in features:
-            feature.setAttribute(
-                self.siruta_field,
-                self.process_siruta_value(feature.attribute(self.siruta_field)),
-            )
-        if not features:
-            raise ServiceError(
-                f'Failed to fetch data from {self.short_name}. No features were returned. Try again later.'
-            )
-        provider = layer.dataProvider()
-        assert provider is not None
-        provider.addAttributes(fields)
-        layer.updateFields()
-        with edit(layer):
-            layer.addFeatures(filter(keep_feature, features))
-        return layer
-
-
-class GISCOCommunes(Service):
+class GISCOCommunes(GISCOService):
     @property
     def full_name(self) -> str:
         return (
@@ -150,37 +148,3 @@ class GISCOCommunes(Service):
     @property
     def is_default(self) -> bool:
         return False
-
-    def get_layer(self, siruta: list[SIRUTA]) -> QgsVectorLayer:
-        siruta_codes = [value.code for value in siruta]
-
-        def keep_feature(feature: QgsFeature) -> bool:
-            return (
-                feature.attribute(self.siruta_field) in siruta_codes
-                and feature.attribute('CNTR_CODE') == 'RO'
-            )
-
-        geojson = get_most_recent_dataset(self.url)
-        layer = QgsVectorLayer('MultiPolygon', self.short_name, 'memory')
-        fields = QgsJsonUtils.stringToFields(geojson)
-        if all(field_.name() != self.siruta_field for field_ in fields):
-            raise ServiceError(
-                f'Failed to fetch data from {self.short_name}. The SIRUTA field {self.siruta_field!r} was not found.'
-            )
-        features = QgsJsonUtils.stringToFeatureList(geojson, fields)
-        for feature in features:
-            feature.setAttribute(
-                self.siruta_field,
-                feature.attribute(self.siruta_field),
-            )
-        if not features:
-            raise ServiceError(
-                f'Failed to fetch data from {self.short_name}. No features were returned. Try again later.'
-            )
-        provider = layer.dataProvider()
-        assert provider is not None
-        provider.addAttributes(fields)
-        layer.updateFields()
-        with edit(layer):
-            layer.addFeatures(filter(keep_feature, features))
-        return layer

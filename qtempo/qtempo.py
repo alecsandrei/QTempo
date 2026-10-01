@@ -7,10 +7,18 @@ import textwrap
 import time
 import typing as t
 from dataclasses import dataclass, field
+from functools import partial
 from urllib.parse import urljoin
 
-from qgis import processing
-from qgis.core import QgsNetworkAccessManager, QgsProject, QgsVectorLayer
+from qgis.core import (
+    QgsApplication,
+    QgsFeature,
+    QgsFields,
+    QgsNetworkAccessManager,
+    QgsProject,
+    QgsTask,
+    QgsVectorLayer,
+)
 from qgis.gui import QgisInterface, QgsCollapsibleGroupBox
 from qgis.PyQt import uic
 from qgis.PyQt.QtCore import (
@@ -20,6 +28,7 @@ from qgis.PyQt.QtCore import (
     QSignalBlocker,
     Qt,
     QThread,
+    QTimer,
     QUrl,
     pyqtSignal,
 )
@@ -39,6 +48,7 @@ from qgis.PyQt.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QTableView,
+    QTableWidget,
     QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
@@ -59,6 +69,7 @@ from ._typing import (
 from .enums import (
     URL,
     Asset,
+    Level,
     QListWidgetItemRole,
     QTreeWidgetItemRole,
     Tabs,
@@ -66,6 +77,8 @@ from .enums import (
 )
 from .exceptions import RequestError
 from .matrix import Field, Matrix
+from .services import nuts
+from .units import TerritorialUnit
 from .utils import (
     add_completer_to_combo_box,
     delete_layout_items,
@@ -76,9 +89,15 @@ from .utils import (
     get_tree_widget_items_r,
     get_widgets,
     parse_node_name,
+    set_combo_box_items,
     update_node_ancestors_and_children,
 )
-from .widgets import LoadingDialog, QListWidgetAlwaysSelected
+from .widgets import (
+    JoinReportDialog,
+    JoinReportRow,
+    LoadingDialog,
+    QListWidgetAlwaysSelected,
+)
 
 UI_Dialog = uic.loadUiType(Asset.DIALOG.value.as_posix())[0]
 
@@ -111,6 +130,26 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.pushButtonAddVectorLayer.clicked.connect(self.add_vector_layer)
         self.checkBoxEnglish.clicked.connect(self.handle_changed_language)
         self.checkBoxRomanian.clicked.connect(self.handle_changed_language)
+        self.comboBoxGiscoYear.currentIndexChanged.connect(
+            self.fill_nuts_combo_boxes
+        )
+        self.comboBoxGiscoYear.currentIndexChanged.connect(
+            self.reset_join_report
+        )
+        self.comboBoxGiscoScale.currentIndexChanged.connect(
+            self.reset_join_report
+        )
+        self.comboBoxGiscoProjection.currentIndexChanged.connect(
+            self.reset_join_report
+        )
+        self.pushButtonValidateJoin.clicked.connect(self.validate_join)
+        self.pushButtonJoinReport.clicked.connect(self.display_join_report)
+
+        # tasks
+        self.nuts_index_task: nuts.FetchNutsIndexTask | None = None
+        self.downloader: nuts.BoundaryDownloader | None = None
+        self.localities_task: FetchLocalitiesTask | None = None
+        self.join_report: list[JoinReportRow] = []
 
         # style
         self.tabWidgetMatrix.setTabEnabled(Tabs.MAP.value, False)
@@ -151,6 +190,25 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         )
         self.checkBoxEnglish = t.cast(QCheckBox, self.checkBoxEnglish)
         self.checkBoxRomanian = t.cast(QCheckBox, self.checkBoxRomanian)
+        self.labelMapLevels = t.cast(QLabel, self.labelMapLevels)
+        self.mGroupBoxGisco = t.cast(
+            QgsCollapsibleGroupBox, self.mGroupBoxGisco
+        )
+        self.comboBoxGiscoYear = t.cast(QComboBox, self.comboBoxGiscoYear)
+        self.comboBoxGiscoScale = t.cast(QComboBox, self.comboBoxGiscoScale)
+        self.comboBoxGiscoProjection = t.cast(
+            QComboBox, self.comboBoxGiscoProjection
+        )
+        self.pushButtonValidateJoin = t.cast(
+            QPushButton, self.pushButtonValidateJoin
+        )
+        self.pushButtonJoinReport = t.cast(
+            QPushButton, self.pushButtonJoinReport
+        )
+        self.labelJoinStatus = t.cast(QLabel, self.labelJoinStatus)
+        self.tableWidgetDownloads = t.cast(
+            QTableWidget, self.tableWidgetDownloads
+        )
 
     def display_dialog(self) -> None:
         self.show()
@@ -322,6 +380,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.pushButtonAddTableLayer.setEnabled(False)
         self.pushButtonAddVectorLayer.setEnabled(False)
         self.tabWidgetMatrix.setTabEnabled(Tabs.MAP.value, False)
+        self.reset_downloads()
 
     def get_selected_dataset(self) -> QTreeWidgetItem | None:
         selected_item = self.treeWidgetTableOfContents.selectedItems()[0]
@@ -447,6 +506,43 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                 leaf_node,
             )
 
+    def add_leaf_node_ro(self) -> None:
+        """Stores the Romanian definition of the selected matrix.
+
+        Territorial units are resolved from the Romanian labels, as the
+        labels in other languages are translated.
+        """
+        current_item = self.listWidgetMatrices.currentItem()
+        if (
+            current_item is None
+            or current_item.data(QListWidgetItemRole.LEAF_NODE_RO.value)
+            is not None
+        ):
+            return None
+        if self.get_language() == 'ro':
+            current_item.setData(
+                QListWidgetItemRole.LEAF_NODE_RO.value,
+                current_item.data(QListWidgetItemRole.LEAF_NODE.value),
+            )
+            return None
+        dataset_code = self.get_matrix_code()
+        request = QNetworkRequest(
+            QUrl(URL.DATASET.value.format(code=dataset_code))
+        )
+        self.disable_gui()
+        reply = self.request_handler.get(
+            request, f'Fetching information for {dataset_code!r}'
+        )
+
+        def set_leaf_node_ro():
+            current_item.setData(
+                QListWidgetItemRole.LEAF_NODE_RO.value,
+                json.loads(reply.readAll().data()),
+            )
+
+        reply.finished.connect(set_leaf_node_ro)
+        reply.finished.connect(self.enable_gui)
+
     def add_queries(self) -> None:
         self.tabWidgetMatrix.setCurrentIndex(Tabs.QUERY.value)
         self.clear_table()
@@ -463,6 +559,8 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         if reply is not None:
             reply.finished.connect(add_dimensions)
             reply.finished.connect(self.enable_gui)
+            # Connected last, as it may disable the GUI while fetching
+            reply.finished.connect(self.add_leaf_node_ro)
         else:
             self.enable_gui()
 
@@ -609,13 +707,137 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             layout.addWidget(label)
             layout.addWidget(combo_box)
 
+    def get_map_levels(self, matrix: Matrix) -> list[Level]:
+        """The levels to map, one layer each. The national total is only
+        mapped when the data has no other level."""
+        levels = matrix.levels
+        if len(levels) > 1 and Level.COUNTRY in levels:
+            levels.remove(Level.COUNTRY)
+        return levels
+
     def handle_map_tab(self) -> None:
         current_item = self.listWidgetMatrices.currentItem()
         assert current_item
         data = t.cast(
             Matrix, current_item.data(QListWidgetItemRole.MATRIX.value)
         )
-        self.tabWidgetMatrix.setTabEnabled(Tabs.MAP.value, data.has_siruta)
+        self.tabWidgetMatrix.setTabEnabled(Tabs.MAP.value, data.has_units)
+        if not data.has_units:
+            return None
+        levels = self.get_map_levels(data)
+        counts = []
+        for level in levels:
+            count = len(data.get_units(level))
+            counts.append(f'{level.label}: {count} unit{"s" * (count != 1)}')
+        self.labelMapLevels.setText(', '.join(counts))
+        is_nuts = levels[0].is_nuts
+        self.mGroupBoxServices.setVisible(not is_nuts)
+        self.mGroupBoxGisco.setVisible(is_nuts)
+        self.reset_join_report()
+        self.reset_downloads()
+        if is_nuts and not self.comboBoxGiscoYear.count():
+            self.load_nuts_index()
+
+    def load_nuts_index(self, year: str | None = None) -> None:
+        if self.nuts_index_task is not None:
+            return None
+        task = nuts.FetchNutsIndexTask(year)
+        task.taskCompleted.connect(partial(self.handle_nuts_index, task))
+        task.taskTerminated.connect(partial(self.handle_nuts_index, task))
+        self.nuts_index_task = task
+        manager = QgsApplication.taskManager()
+        assert manager is not None
+        manager.addTask(task)
+
+    def handle_nuts_index(self, task: nuts.FetchNutsIndexTask) -> None:
+        self.nuts_index_task = None
+        if task.exception is not None:
+            message_bar = self.qtempo.iface.messageBar()
+            assert message_bar
+            message_bar.pushCritical(
+                'Failed to fetch the GISCO NUTS index', str(task.exception)
+            )
+            return None
+        if task.status() == QgsTask.TaskStatus.Complete:
+            self.fill_nuts_combo_boxes()
+
+    def fill_nuts_combo_boxes(self) -> None:
+        if not self.comboBoxGiscoYear.count():
+            with QSignalBlocker(self.comboBoxGiscoYear):
+                self.comboBoxGiscoYear.addItems(nuts.CACHED_YEARS)
+        units = nuts.CACHED_UNITS.get(self.comboBoxGiscoYear.currentText())
+        if units is None:
+            self.load_nuts_index(self.comboBoxGiscoYear.currentText())
+            return None
+        units = units.filter(spatial_type=[nuts.SPATIAL_TYPE])
+        set_combo_box_items(
+            self.comboBoxGiscoScale, units.values('scale'), nuts.DEFAULT_SCALE
+        )
+        set_combo_box_items(
+            self.comboBoxGiscoProjection,
+            units.values('projection'),
+            nuts.DEFAULT_PROJECTION,
+        )
+
+    def get_nuts_units(self) -> nuts.Units | None:
+        """The NUTS files for the selected year, scale and projection."""
+        units = nuts.CACHED_UNITS.get(self.comboBoxGiscoYear.currentText())
+        if units is None:
+            return None
+        return units.filter(
+            spatial_type=[nuts.SPATIAL_TYPE],
+            scale=[self.comboBoxGiscoScale.currentText()],
+            projection=[self.comboBoxGiscoProjection.currentText()],
+        )
+
+    def push_nuts_index_warning(self) -> None:
+        self.load_nuts_index()
+        message_bar = self.qtempo.iface.messageBar()
+        assert message_bar
+        message_bar.pushWarning(
+            'GISCO', 'The NUTS index is still loading. Try again shortly.'
+        )
+
+    def validate_join(self) -> None:
+        matrix = self.get_model_matrix()
+        assert matrix is not None
+        available = self.get_nuts_units()
+        if available is None:
+            return self.push_nuts_index_warning()
+        ids = {unit.id for unit in available}
+        report = [
+            JoinReportRow(unit.label, level.label, unit.code, unit.code in ids)
+            for level in self.get_map_levels(matrix)
+            for unit in matrix.get_units(level)
+        ]
+        matched = sum(row.matched for row in report)
+        text = (
+            f'{matched} of {len(report)} units are in '
+            f'NUTS {self.comboBoxGiscoYear.currentText()}.'
+        )
+        unresolved = matrix.unresolved_labels
+        if unresolved:
+            report.extend(
+                JoinReportRow(label, '', '', False) for label in unresolved
+            )
+            count = len(unresolved)
+            text += f' {count} label{"s" * (count != 1)} could not be mapped.'
+        self.join_report = report
+        self.labelJoinStatus.setText(text)
+        self.pushButtonJoinReport.setEnabled(True)
+
+    def reset_join_report(self) -> None:
+        self.join_report = []
+        self.labelJoinStatus.clear()
+        self.pushButtonJoinReport.setEnabled(False)
+
+    def reset_downloads(self) -> None:
+        self.tableWidgetDownloads.clear()
+        self.tableWidgetDownloads.setRowCount(0)
+        self.tableWidgetDownloads.setColumnCount(0)
+
+    def display_join_report(self) -> None:
+        JoinReportDialog(self.join_report, self).exec()
 
     def fetch_data(self) -> None:
         body = self.construct_body()
@@ -638,7 +860,12 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             assert current_item
             current_item.setData(
                 QListWidgetItemRole.MATRIX.value,
-                Matrix.from_response(reply.readAll().data(), body),  # pyright: ignore[reportArgumentType]
+                Matrix.from_response(
+                    reply.readAll().data(),  # pyright: ignore[reportArgumentType]
+                    body,
+                    current_item.data(QListWidgetItemRole.LEAF_NODE.value),
+                    current_item.data(QListWidgetItemRole.LEAF_NODE_RO.value),
+                ),
             )
 
         reply.finished.connect(set_matrix)
@@ -719,34 +946,154 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             for combo_box in options_combo_boxes
         }
 
-    def get_grouped_matrix(self) -> Matrix:
-        matrix = self.get_model_matrix()
+    def get_grouped_matrix(self, matrix: Matrix) -> Matrix:
         group_by_field = self.comboBoxGroupByField.currentText()
-        assert matrix is not None
         return matrix.group_by(
             matrix.fields.get(group_by_field), self.get_table_options()
         )
 
-    def get_siruta_field_name(self) -> str:
-        return 'SIRUTA'
-
     def add_vector_layer(self) -> None:
-        # NOTE: This function throws the a warning:
-        # Warning: QObject::setParent: Cannot set parent
-        # It is related to the
-        handler = ServiceHandler(self)
-        assert handler.service is not None
+        matrix = self.get_model_matrix()
+        assert matrix is not None
+        levels = self.get_map_levels(matrix)
+        if (self.downloader is not None and self.downloader.is_running) or (
+            self.localities_task is not None
+        ):
+            message_bar = self.qtempo.iface.messageBar()
+            assert message_bar
+            message_bar.pushInfo('QTempo', 'A download is already running.')
+        elif levels[0].is_nuts:
+            self.add_nuts_layers(matrix, levels)
+        else:
+            self.add_localities_layer(matrix)
 
-        self.disable_gui()
-        loading_dialog, loading_label = start_loading_dialog_loop(
-            self,
-            f'Fetching data from service {handler.service.short_name}',
+    def add_nuts_layers(self, matrix: Matrix, levels: list[Level]) -> None:
+        year = self.comboBoxGiscoYear.currentText()
+        scale = self.comboBoxGiscoScale.currentText()
+        projection = self.comboBoxGiscoProjection.currentText()
+        if not (year and scale and projection):
+            return self.push_nuts_index_warning()
+        code = self.get_matrix_code()
+        assert code is not None
+        grouped = {
+            level: self.get_grouped_matrix(matrix.filter_level(level))
+            for level in levels
+        }
+        units = [
+            nuts.Unit(unit.code, nuts.SPATIAL_TYPE, scale, projection, year)
+            for level_matrix in grouped.values()
+            for unit in level_matrix.units or []
+            if unit is not None
+        ]
+        self.downloader = nuts.BoundaryDownloader(
+            units, self.tableWidgetDownloads
         )
-        handler.error_ocurred.connect(self.qtempo._handle_error_signal)
-        handler.finished.connect(loading_dialog.close)  # pyright: ignore[reportArgumentType]
-        handler.finished.connect(loading_label.requestInterruption)
-        handler.finished.connect(self.enable_gui)
-        handler.start()
+        self.downloader.finished.connect(
+            partial(self.add_nuts_boundaries, grouped, code, projection)
+        )
+        self.pushButtonAddVectorLayer.setEnabled(False)
+        self.downloader.start()
+
+    def add_nuts_boundaries(
+        self,
+        grouped: dict[Level, Matrix],
+        name: str,
+        projection: str,
+        boundaries: nuts.Boundaries,
+    ) -> None:
+        self.pushButtonAddVectorLayer.setEnabled(True)
+        message_bar = self.qtempo.iface.messageBar()
+        assert message_bar
+        if not boundaries.features:
+            message_bar.pushCritical(
+                'GISCO',
+                'No boundaries were downloaded. See the errors in the download table.',
+            )
+            return None
+        if boundaries.errors:
+            message_bar.pushWarning(
+                'GISCO',
+                f'{len(boundaries.errors)} boundaries failed to download. See the errors in the download table.',
+            )
+        self.add_layers(
+            [
+                level_matrix.join_boundaries(
+                    boundaries.fields,
+                    boundaries.features,
+                    'NUTS_ID',
+                    f'{name} — {level.label}',
+                    f'EPSG:{projection}',
+                )
+                for level, level_matrix in grouped.items()
+            ]
+        )
+
+    def add_localities_layer(self, matrix: Matrix) -> None:
+        service = self.get_selected_service()
+        assert service is not None
+        grouped = self.get_grouped_matrix(matrix)
+        task = FetchLocalitiesTask(
+            service, [unit for unit in grouped.units or [] if unit is not None]
+        )
+        task.taskCompleted.connect(
+            partial(
+                self.add_localities_boundaries,
+                task,
+                grouped,
+                f'{self.get_matrix_code()} — {Level.LOCALITY.label}',
+            )
+        )
+        task.taskTerminated.connect(partial(self.handle_localities_error, task))
+        self.localities_task = task
+        self.pushButtonAddVectorLayer.setEnabled(False)
+        manager = QgsApplication.taskManager()
+        assert manager is not None
+        manager.addTask(task)
+        message_bar = self.qtempo.iface.messageBar()
+        assert message_bar
+        message_bar.pushInfo(
+            service.short_name,
+            'Downloading the boundaries. The layer is added when the download finishes.',
+        )
+
+    def add_localities_boundaries(
+        self, task: FetchLocalitiesTask, grouped: Matrix, name: str
+    ) -> None:
+        self.localities_task = None
+        self.pushButtonAddVectorLayer.setEnabled(True)
+        self.add_layers(
+            [
+                grouped.join_boundaries(
+                    task.fields,
+                    task.features,
+                    task.service.siruta_field,
+                    name,
+                )
+            ]
+        )
+
+    def handle_localities_error(self, task: FetchLocalitiesTask) -> None:
+        self.localities_task = None
+        self.pushButtonAddVectorLayer.setEnabled(True)
+        if task.exception is not None:
+            self.qtempo._handle_error_signal(task.exception)
+
+    def add_layers(self, layers: list[QgsVectorLayer]) -> None:
+        """Adds the layers, from the coarsest level up, and zooms to the
+        first one."""
+        project = QgsProject.instance()
+        assert project is not None
+        for layer in layers:
+            project.addMapLayer(layer)
+        self.qtempo.iface.setActiveLayer(layers[0])
+        self.qtempo.iface.zoomToActiveLayer()
+
+    def cancel_tasks(self) -> None:
+        if self.downloader is not None:
+            self.downloader.cancel()
+        for task in (self.nuts_index_task, self.localities_task):
+            if task is not None:
+                task.cancel()
 
     def add_table_layer(self) -> None:
         model = self.get_model_matrix()
@@ -777,61 +1124,27 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.set_gui_state(False)
 
 
-class ServiceHandler(QThread):
-    error_ocurred = pyqtSignal(Exception)
+class FetchLocalitiesTask(QgsTask):
+    """Fetches the boundaries of localities from a service."""
 
-    def __init__(self, dialog: Dialog):
-        super().__init__(dialog)
-        self.dialog = dialog
-        self.service = self.dialog.get_selected_service()
-        assert self.service is not None
-
-    def _run(self):
-        grouped_matrix = self.dialog.get_grouped_matrix()
-        matrix = grouped_matrix.as_table(
-            self.dialog.get_matrix_code(), self.dialog.get_siruta_field_name()
+    def __init__(self, service: services.Service, units: list[TerritorialUnit]):
+        super().__init__(
+            f'Fetching boundaries from {service.short_name}',
+            QgsTask.Flag.CanCancel,
         )
-        assert grouped_matrix.siruta is not None
-        assert self.service is not None
+        self.service = service
+        self.units = units
+        self.fields = QgsFields()
+        self.features: list[QgsFeature] = []
+        self.exception: Exception | None = None
 
-        assert self.service is not None
-
-        service_layer = self.service.get_layer(
-            [siruta for siruta in grouped_matrix.siruta if siruta is not None]
-        )
-        results = processing.run(  # pyright: ignore[reportAttributeAccessIssue]
-            'native:joinattributestable',
-            {
-                'INPUT': service_layer,
-                'FIELD': self.service.siruta_field,
-                'INPUT_2': matrix,
-                'FIELD_2': self.dialog.get_siruta_field_name(),
-                'FIELDS_TO_COPY': [],
-                'METHOD': 1,
-                'DISCARD_NONMATCHING': True,
-                'PREFIX': '',
-                'OUTPUT': 'TEMPORARY_OUTPUT',
-            },
-        )
-        assert results is not None
-        processing_result = t.cast(QgsVectorLayer, results['OUTPUT'])
-
-        processing_result.setName(
-            f'{self.service.short_name} [{self.dialog.get_matrix_code()}]'
-        )
-        instance = QgsProject().instance()
-        if instance is not None:
-            instance.addMapLayer(processing_result)
-            canvas = self.dialog.qtempo.iface.mapCanvas()
-            assert canvas
-            canvas.setExtent(processing_result.extent())
-
-    def run(self):
-        assert self.service
+    def run(self) -> bool:
         try:
-            self._run()
+            self.fields, self.features = self.service.get_features(self.units)
         except Exception as e:
-            self.error_ocurred.emit(e)
+            self.exception = e
+            return False
+        return not self.isCanceled()
 
 
 class MatrixModel(QAbstractTableModel):
@@ -887,7 +1200,10 @@ def start_loading_dialog_loop(
     parent: QWidget, text: str
 ) -> tuple[LoadingDialog, LoadingLabel]:
     loading_dialog = LoadingDialog(parent)
-    loading_label = LoadingLabel(text)
+    # With a parent, the thread outlives its Python references; deleting it
+    # while it runs aborts QGIS
+    loading_label = LoadingLabel(text, parent)
+    loading_label.finished.connect(loading_label.deleteLater)
     loading_label.update_label.connect(loading_dialog.update_loading_label)
     loading_label.start()
     loading_dialog.show()
@@ -900,6 +1216,21 @@ class RequestHandler:
     parent: Dialog
     loading_label: LoadingLabel = field(init=False)
     loading_dialog: LoadingDialog = field(init=False)
+    replies: list[QNetworkReply] = field(init=False, default_factory=list)
+
+    def keep_until_finished(self, reply: QNetworkReply) -> None:
+        """Keeps a reference to the reply until its finished slots ran.
+
+        The slots are often closures over the reply. Without a reference,
+        the garbage collector can clear them while the request runs, which
+        crashes QGIS when the reply finishes.
+        """
+        self.replies.append(reply)
+
+        def release() -> None:
+            QTimer.singleShot(0, lambda: self.replies.remove(reply))
+
+        reply.finished.connect(release)
 
     def show_dialog(self, text: str):
         self.loading_dialog, self.loading_label = start_loading_dialog_loop(
@@ -912,6 +1243,7 @@ class RequestHandler:
         self.show_dialog(text)
         reply = self.manager.post(request, data)
         assert reply is not None
+        self.keep_until_finished(reply)
         reply.finished.connect(self.close_dialog)
         return reply
 
@@ -919,6 +1251,7 @@ class RequestHandler:
         self.show_dialog(text)
         reply = self.manager.get(request)
         assert reply is not None
+        self.keep_until_finished(reply)
         reply.finished.connect(self.close_dialog)
         return reply
 
@@ -947,6 +1280,8 @@ class QTempo:
     def unload(self) -> None:
         self.iface.removePluginMenu('&QTempo', self.action)
         self.iface.removeToolBarIcon(self.action)
+        if not self.first_start:
+            self.dialog.cancel_tasks()
 
     def _handle_error_signal(self, error: Exception) -> None:
         message_bar = self.iface.messageBar()

@@ -8,6 +8,7 @@ from qgis.PyQt import QtCore
 
 _PARENT_URL = 'http://statistici.insse.ro:8077/tempo-ins/'
 _ASSETS_DIR = Path(__file__).parent / 'assets'
+GISCO_NUTS_URL = 'https://gisco-services.ec.europa.eu/distribution/v2/nuts/'
 
 
 class Asset(Enum):
@@ -20,6 +21,12 @@ class URL(Enum):
     DATASET = urljoin(_PARENT_URL, 'matrix/{code}/')
     TOC = urljoin(_PARENT_URL, 'context/')
     CONTEXT = urljoin(TOC, '{code}')
+
+
+class NutsURL(Enum):
+    DATASETS = urljoin(GISCO_NUTS_URL, 'datasets.json')
+    UNITS = urljoin(GISCO_NUTS_URL, 'nuts-{year}-units.json')
+    UNIT = urljoin(GISCO_NUTS_URL, 'distribution/{filename}')
 
 
 class EnumZero(Enum):
@@ -37,6 +44,33 @@ class Tabs(EnumZero):
     QUERY = auto()
     TABLE = auto()
     MAP = auto()
+
+
+class Level(Enum):
+    COUNTRY = 0
+    MACROREGION = 1
+    REGION = 2
+    COUNTY = 3
+    LOCALITY = 4
+
+    @property
+    def label(self) -> str:
+        return {
+            Level.COUNTRY: 'Country',
+            Level.MACROREGION: 'Macroregions',
+            Level.REGION: 'Regions',
+            Level.COUNTY: 'Counties',
+            Level.LOCALITY: 'Localities',
+        }[self]
+
+    @property
+    def is_nuts(self) -> bool:
+        return self is not Level.LOCALITY
+
+    @classmethod
+    def from_nuts_id(cls, nuts_id: str) -> Level:
+        # RO is the country, RO1 a macroregion, RO11 a region, RO111 a county
+        return cls(len(nuts_id) - 2)
 
 
 class WidgetProperty(Enum):
@@ -63,3 +97,4 @@ class QListWidgetItemRole(UserRole):
     LEAF_NODE = auto()
     MATRIX = auto()
     PARENT_NODE = auto()
+    LEAF_NODE_RO = auto()

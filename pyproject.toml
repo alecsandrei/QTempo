@@ -32,6 +32,8 @@ pythonVersion = "3.12"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
+qgis_gui_enabled = false
 
 [tool.ruff]
 exclude = [

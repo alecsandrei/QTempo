@@ -52,6 +52,31 @@ jobs:
       - name: Pyright
         run: uv run pyright
 
+  test:
+    name: Pytest (QGIS ${{ matrix.qgis }})
+    runs-on: ubuntu-latest
+    container:
+      image: qgis/qgis:${{ matrix.qgis }}
+    strategy:
+      fail-fast: false
+      matrix:
+        qgis: ["3.34-noble", "ltr", "stable"]
+    env:
+      UV_LINK_MODE: copy
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+
+      - name: Create venv on top of the system QGIS
+        run: uv venv --system-site-packages --python /usr/bin/python3
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Pytest
+        run: uv run pytest
+
   pyqt6:
     name: PyQt6 compatibility
     runs-on: ubuntu-latest

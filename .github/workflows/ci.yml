@@ -54,6 +54,12 @@ jobs:
 
   pyqt6:
     name: PyQt6 compatibility
-    uses: opengisch/qgis-plugin-ci/.github/workflows/pyqt6_test.yml@master
-    with:
-      plugin_path: qtempo
+    runs-on: ubuntu-latest
+    container:
+      image: registry.gitlab.com/oslandia/qgis/pyqgis-4-checker/pyqgis-qt-checker:latest
+      options: --user root
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check PyQt5 to PyQt6 compatibility
+        run: pyqt5_to_pyqt6.py --dry_run qtempo

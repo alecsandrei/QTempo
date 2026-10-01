@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+
+      - name: Lint
+        run: uv run --locked --only-group lint ruff check .
+
+      - name: Check formatting
+        run: uv run --locked --only-group lint ruff format --check .
+
+  typecheck:
+    name: Pyright (QGIS ${{ matrix.qgis }})
+    runs-on: ubuntu-latest
+    container:
+      image: qgis/qgis:${{ matrix.qgis }}
+    strategy:
+      fail-fast: false
+      matrix:
+        qgis: ["3.34-noble", "3.44-noble", "4.2-questing"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+
+      - name: Create venv on top of the system QGIS
+        run: uv venv --system-site-packages --python /usr/bin/python3
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Pyright
+        # TODO: make blocking once the baseline errors are fixed.
+        continue-on-error: true
+        run: uv run pyright
+
+  pyqt6:
+    name: PyQt6 compatibility
+    uses: opengisch/qgis-plugin-ci/.github/workflows/pyqt6_test.yml@master
+    with:
+      plugin_path: qtempo

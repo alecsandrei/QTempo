@@ -48,7 +48,6 @@ jobs:
         run: uv sync --locked
 
       - name: Pyright
-        continue-on-error: true
         run: uv run pyright
 
   pyqt6:

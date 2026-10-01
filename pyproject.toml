@@ -1,3 +1,39 @@
+[project]
+name = "qtempo"
+version = "1.2.0"
+description = "Plugin for accessing data from the TEMPO-Online statistical database of the National Institute of Statistics of Romania"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-qgis>=5.0.0",
+]
+lint = [
+    "pyqt5-stubs>=5.15.6.0",
+    "pyright[nodejs]>=1.1.414",
+    "ruff>=0.16.9",
+]
+
+[tool.uv]
+package = false
+default-groups = ["dev", "lint"]
+
+[tool.qgis-plugin-ci]
+plugin_path = "qtempo"
+project_slug = "QTempo"
+
+[tool.pyright]
+include = ["qtempo"]
+pythonVersion = "3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
 exclude = [
     ".bzr",
     ".direnv",
@@ -30,17 +66,17 @@ line-length = 80
 indent-width = 4
 target-version = "py312"
 
-[lint]
+[tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
 ignore = []
 fixable = ["ALL"]
 unfixable = []
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 
-[lint.isort]
+[tool.ruff.lint.isort]
 required-imports = ["from __future__ import annotations"]
 
-[format]
+[tool.ruff.format]
 quote-style = "single"
 indent-style = "space"
 skip-magic-trailing-comma = false

@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import collections.abc as c
-import itertools
 import json
 import textwrap
-import time
 import typing as t
 from dataclasses import dataclass, field
 from functools import partial
 from urllib.parse import urljoin
 
 from qgis.core import (
+    Qgis,
     QgsApplication,
     QgsFeature,
     QgsFields,
@@ -19,18 +18,21 @@ from qgis.core import (
     QgsTask,
     QgsVectorLayer,
 )
-from qgis.gui import QgisInterface, QgsCollapsibleGroupBox
-from qgis.PyQt import uic
+from qgis.gui import (
+    QgisInterface,
+    QgsCollapsibleGroupBox,
+    QgsMessageBar,
+    QgsMessageBarItem,
+)
+from qgis.PyQt import sip, uic
 from qgis.PyQt.QtCore import (
     QAbstractTableModel,
     QModelIndex,
     QObject,
     QSignalBlocker,
     Qt,
-    QThread,
     QTimer,
     QUrl,
-    pyqtSignal,
 )
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtNetwork import QNetworkReply, QNetworkRequest
@@ -47,6 +49,7 @@ from qgis.PyQt.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QProgressBar,
     QPushButton,
     QTableView,
     QTableWidget,
@@ -96,7 +99,6 @@ from .utils import (
 from .widgets import (
     JoinReportDialog,
     JoinReportRow,
-    LoadingDialog,
     QListWidgetAlwaysSelected,
 )
 
@@ -104,11 +106,13 @@ UI_Dialog = uic.loadUiType(Asset.DIALOG.value.as_posix())[0]
 
 
 class Dialog(QDialog, UI_Dialog):  # type: ignore
-    def __init__(self, qtempo):
-        super().__init__()
+    def __init__(self, qtempo, parent: QWidget | None = None):
+        super().__init__(parent)
         self.setupUi(self)
         self.qtempo = t.cast(QTempo, qtempo)
         self.request_handler = RequestHandler(self.qtempo.network_manager, self)
+        self.progress_item: QgsMessageBarItem | None = None
+        self.focus_widget: QWidget | None = None
 
         # signals
         self.treeWidgetTableOfContents.itemSelectionChanged.connect(
@@ -211,15 +215,59 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.tableWidgetDownloads = t.cast(
             QTableWidget, self.tableWidgetDownloads
         )
+        self.messageBar = t.cast(QgsMessageBar, self.messageBar)
 
     def display_dialog(self) -> None:
-        self.show()
-        self.exec()
+        """Shows the dialog, or brings it back above QGIS if it is already
+        open."""
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def get_message_bar(self) -> QgsMessageBar:
+        """The message bar of the dialog, or the QGIS one if the dialog is
+        closed."""
+        if self.isVisible():
+            return self.messageBar
+        message_bar = self.qtempo.iface.messageBar()
+        assert message_bar
+        return message_bar
+
+    def show_progress(self, text: str) -> None:
+        """Shows a busy bar with the text of the running request."""
+        if self.progress_item is not None and not sip.isdeleted(
+            self.progress_item
+        ):
+            self.progress_item.setText(text)
+            return None
+        item = self.messageBar.createMessage(text)
+        assert item is not None
+        progress_bar = QProgressBar(item)
+        progress_bar.setRange(0, 0)
+        layout = item.layout()
+        assert layout is not None
+        layout.addWidget(progress_bar)
+        self.messageBar.pushWidget(item, Qgis.MessageLevel.Info)
+        self.progress_item = item
+
+    def hide_progress(self) -> None:
+        # The close button of the message bar deletes the item
+        if self.progress_item is not None and not sip.isdeleted(
+            self.progress_item
+        ):
+            self.messageBar.popWidget(self.progress_item)
+        self.progress_item = None
 
     def fill_table_of_contents(self) -> None:
+        reply = self.table_of_contents_reply
+        if reply.error() != QNetworkReply.NetworkError.NoError:  # pyright: ignore[reportCallIssue]
+            return None
         nodes = t.cast(
             list[Node],
-            json.loads(self.table_of_contents_reply.readAll().data()),
+            json.loads(reply.readAll().data()),
         )
         if self.treeWidgetTableOfContents.topLevelItemCount():
             self.treeWidgetTableOfContents.clear()
@@ -242,7 +290,6 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                 self.treeWidgetTableOfContents.addTopLevelItem(item)
             else:
                 parent_item.addChild(item)
-        self.display_dialog()
 
     def preprocess_url(self, url: str) -> str:
         lang = self.get_language()
@@ -251,9 +298,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
     def fetch_table_of_contents(self) -> QNetworkReply:
         text = 'Fetching the table of contents'
         request = QNetworkRequest(QUrl(self.preprocess_url(URL.TOC.value)))
-        self.table_of_contents_reply = self.qtempo.request_handler.get(
-            request, text
-        )
+        self.table_of_contents_reply = self.request_handler.get(request, text)
         if self.treeWidgetTableOfContents.topLevelItemCount():
             self.table_of_contents_reply.finished.connect(self.switch_language)
         else:
@@ -338,15 +383,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                 )
 
     def handle_changed_language(self):
-        language = 'romanian' if self.get_language() == 'ro' else 'english'
-        self.disable_gui()
-        loading_dialog, loading_label = start_loading_dialog_loop(
-            self, f'Fetching table of contents in the {language} language.'
-        )
-        reply = self.fetch_table_of_contents()
-        reply.finished.connect(loading_dialog.close)  # pyright: ignore[reportArgumentType]
-        reply.finished.connect(loading_label.requestInterruption)
-        reply.finished.connect(self.enable_gui)
+        self.fetch_table_of_contents()
 
     def filter_toc(
         self,
@@ -532,7 +569,6 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         request = QNetworkRequest(
             QUrl(URL.DATASET.value.format(code=dataset_code))
         )
-        self.disable_gui()
         reply = self.request_handler.get(
             request, f'Fetching information for {dataset_code!r}'
         )
@@ -544,12 +580,10 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             )
 
         reply.finished.connect(set_leaf_node_ro)
-        reply.finished.connect(self.enable_gui)
 
     def add_queries(self) -> None:
         self.tabWidgetMatrix.setCurrentIndex(Tabs.QUERY.value)
         self.clear_table()
-        self.disable_gui()
         reply = self.get_leaf_node()
 
         def add_dimensions() -> None:
@@ -561,11 +595,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
 
         if reply is not None:
             reply.finished.connect(add_dimensions)
-            reply.finished.connect(self.enable_gui)
-            # Connected last, as it may disable the GUI while fetching
             reply.finished.connect(self.add_leaf_node_ro)
-        else:
-            self.enable_gui()
 
     def set_query_children_hidden(self) -> None:
         parent_widget = t.cast(QListWidget, self.sender())
@@ -790,8 +820,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
     def handle_nuts_index(self, task: nuts.FetchNutsIndexTask) -> None:
         self.nuts_index_task = None
         if task.exception is not None:
-            message_bar = self.qtempo.iface.messageBar()
-            assert message_bar
+            message_bar = self.get_message_bar()
             message_bar.pushCritical(
                 'Failed to fetch the GISCO NUTS index', str(task.exception)
             )
@@ -830,8 +859,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
 
     def push_nuts_index_warning(self) -> None:
         self.load_nuts_index()
-        message_bar = self.qtempo.iface.messageBar()
-        assert message_bar
+        message_bar = self.get_message_bar()
         message_bar.pushWarning(
             'GISCO', 'The NUTS index is still loading. Try again shortly.'
         )
@@ -876,6 +904,8 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
 
     def display_join_report(self) -> None:
         JoinReportDialog(self.join_report, self).exec()
+        # On macOS, closing a modal dialog activates the QGIS window
+        self.activateWindow()
 
     def fetch_data(self) -> None:
         body = self.construct_body()
@@ -886,7 +916,6 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         request.setHeader(
             QNetworkRequest.KnownHeaders.ContentTypeHeader, 'application/json'
         )
-        self.disable_gui()
         reply = self.request_handler.post(
             request,
             json.dumps(body).encode('UTF-8'),
@@ -912,7 +941,6 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         reply.finished.connect(
             lambda: self.pushButtonAddTableLayer.setEnabled(True)
         )
-        reply.finished.connect(self.enable_gui)
 
     def clear_table_options(self) -> None:
         delete_layout_items(self.frameTableOptions.layout())
@@ -952,6 +980,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         dialog.setWindowTitle(service.short_name)
         dialog.setLayout(layout)
         dialog.exec()
+        self.activateWindow()
 
     def add_services(self) -> None:
         self.mGroupBoxServices.setLayout(QVBoxLayout())
@@ -979,8 +1008,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         if (self.downloader is not None and self.downloader.is_running) or (
             self.localities_task is not None
         ):
-            message_bar = self.qtempo.iface.messageBar()
-            assert message_bar
+            message_bar = self.get_message_bar()
             message_bar.pushInfo('QTempo', 'A download is already running.')
         elif levels[0].is_nuts:
             self.add_nuts_layers(matrix, levels)
@@ -1019,8 +1047,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         boundaries: nuts.Boundaries,
     ) -> None:
         self.pushButtonAddVectorLayer.setEnabled(True)
-        message_bar = self.qtempo.iface.messageBar()
-        assert message_bar
+        message_bar = self.get_message_bar()
         if not boundaries.features:
             message_bar.pushCritical(
                 'GISCO',
@@ -1065,8 +1092,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         manager = QgsApplication.taskManager()
         assert manager is not None
         manager.addTask(task)
-        message_bar = self.qtempo.iface.messageBar()
-        assert message_bar
+        message_bar = self.get_message_bar()
         message_bar.pushInfo(
             service.short_name,
             'Downloading the boundaries. The layer is added when the download finishes.',
@@ -1130,13 +1156,23 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
 
     def set_gui_state(self, state: bool) -> None:
         for obj in self.children():
-            if isinstance(obj, QWidget):
+            if isinstance(obj, QWidget) and obj is not self.messageBar:
                 obj.setEnabled(state)
 
     def enable_gui(self) -> None:
         self.set_gui_state(True)
+        # Disabling a widget takes away its focus
+        widget = self.focus_widget
+        if (
+            widget is not None
+            and not sip.isdeleted(widget)
+            and widget.isVisible()
+        ):
+            widget.setFocus()
+        self.focus_widget = None
 
     def disable_gui(self) -> None:
+        self.focus_widget = self.focusWidget()
         self.set_gui_state(False)
 
 
@@ -1202,45 +1238,13 @@ class MatrixModel(QAbstractTableModel):
         return None
 
 
-class LoadingLabel(QThread):
-    update_label = pyqtSignal(str)
-
-    def __init__(self, label: str, base: QWidget | None = None):
-        self.base = base
-        super().__init__(self.base)
-        self.label = label
-
-    def spin(self) -> None:
-        for char in itertools.cycle('🌏🌍🌎'):
-            self.update_label.emit(f'{self.label}\n{char}  ')
-            time.sleep(0.5)
-            if self.isInterruptionRequested():
-                break
-
-    def run(self) -> None:
-        self.spin()
-
-
-def start_loading_dialog_loop(
-    parent: QWidget, text: str
-) -> tuple[LoadingDialog, LoadingLabel]:
-    loading_dialog = LoadingDialog(parent)
-    # With a parent, the thread outlives its Python references; deleting it
-    # while it runs aborts QGIS
-    loading_label = LoadingLabel(text, parent)
-    loading_label.finished.connect(loading_label.deleteLater)
-    loading_label.update_label.connect(loading_dialog.update_loading_label)
-    loading_label.start()
-    loading_dialog.show()
-    return (loading_dialog, loading_label)
-
-
 @dataclass
 class RequestHandler:
+    """Sends the requests of the dialog, which shows their progress and is
+    disabled until they all finish."""
+
     manager: QgsNetworkAccessManager
     parent: Dialog
-    loading_label: LoadingLabel = field(init=False)
-    loading_dialog: LoadingDialog = field(init=False)
     replies: list[QNetworkReply] = field(init=False, default_factory=list)
 
     def keep_until_finished(self, reply: QNetworkReply) -> None:
@@ -1253,36 +1257,38 @@ class RequestHandler:
         self.replies.append(reply)
 
         def release() -> None:
-            QTimer.singleShot(0, lambda: self.replies.remove(reply))
+            # Runs after the finished slots, so the requests they start keep
+            # the dialog disabled
+            QTimer.singleShot(0, lambda: self.release(reply))
 
         reply.finished.connect(release)
 
-    def show_dialog(self, text: str):
-        self.loading_dialog, self.loading_label = start_loading_dialog_loop(
-            self.parent, text
-        )
+    def release(self, reply: QNetworkReply) -> None:
+        self.replies.remove(reply)
+        if not self.replies:
+            self.parent.hide_progress()
+            self.parent.enable_gui()
+
+    def show_progress(self, text: str) -> None:
+        if not self.replies:
+            self.parent.disable_gui()
+        self.parent.show_progress(text)
 
     def post(
         self, request: QNetworkRequest, data: bytes, text: str
     ) -> QNetworkReply:
-        self.show_dialog(text)
+        self.show_progress(text)
         reply = self.manager.post(request, data)
         assert reply is not None
         self.keep_until_finished(reply)
-        reply.finished.connect(self.close_dialog)
         return reply
 
     def get(self, request: QNetworkRequest, text: str) -> QNetworkReply:
-        self.show_dialog(text)
+        self.show_progress(text)
         reply = self.manager.get(request)
         assert reply is not None
         self.keep_until_finished(reply)
-        reply.finished.connect(self.close_dialog)
         return reply
-
-    def close_dialog(self) -> None:
-        self.loading_label.requestInterruption()
-        self.loading_dialog.close()
 
 
 class QTempo:
@@ -1307,15 +1313,16 @@ class QTempo:
         self.iface.removeToolBarIcon(self.action)
         if not self.first_start:
             self.dialog.cancel_tasks()
+            # The dialog is owned by the QGIS window, which outlives the plugin
+            self.dialog.close()
+            self.dialog.deleteLater()
 
     def _handle_error_signal(self, error: Exception) -> None:
-        message_bar = self.iface.messageBar()
-        assert message_bar
+        message_bar = self.dialog.get_message_bar()
         message_bar.pushCritical(error.__class__.__name__, str(error))
         raise error
 
     def _handle_table_of_contents_error(self):
-        self.first_start = True
         self._handle_error_signal(
             RequestError(
                 'Error occured when trying to fetch the table of contents. Check your internet connection and try again.'
@@ -1326,15 +1333,12 @@ class QTempo:
         if self.first_start is True:
             self.first_start = False
             self.network_manager = QgsNetworkAccessManager()
-            self.dialog = Dialog(self)
-            main_window = self.iface.mainWindow()
-            assert main_window
-            self.request_handler = RequestHandler(
-                self.network_manager, main_window
-            )
-            self.table_of_contents_reply = self.dialog.fetch_table_of_contents()
-            self.table_of_contents_reply.errorOccurred.connect(
-                self._handle_table_of_contents_error
-            )
-        else:
-            self.dialog.show()
+            self.dialog = Dialog(self, self.iface.mainWindow())
+        # Fetched again if it failed before
+        if (
+            not self.dialog.treeWidgetTableOfContents.topLevelItemCount()
+            and not self.dialog.request_handler.replies
+        ):
+            reply = self.dialog.fetch_table_of_contents()
+            reply.errorOccurred.connect(self._handle_table_of_contents_error)
+        self.dialog.display_dialog()

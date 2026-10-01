@@ -3,12 +3,11 @@ from __future__ import annotations
 import collections.abc as c
 import typing as t
 
-from qgis.PyQt.QtCore import QItemSelection, QModelIndex, Qt
-from qgis.PyQt.QtGui import QColor, QFont
+from qgis.PyQt.QtCore import QItemSelection, QModelIndex
+from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
     QDialog,
-    QLabel,
     QListWidget,
     QListWidgetItem,
     QTableWidget,
@@ -54,23 +53,6 @@ class QListWidgetAlwaysSelected(QListWidget):
             else:
                 self.setCurrentItem(self._get_first_visible_item())
         super().selectionChanged(selected, deselected)
-
-
-class LoadingDialog(QDialog):
-    def __init__(self, base: QWidget | None = None):
-        self.base = base
-        super().__init__(base)
-        self.setWindowTitle(' ')
-        layout = QVBoxLayout(self)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setLayout(layout)
-        self.label = QLabel(self)
-        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label.setFont(QFont(self.label.font().family(), 15))
-        layout.addWidget(self.label)
-
-    def update_loading_label(self, text: str) -> None:
-        self.label.setText(text)
 
 
 class JoinReportRow(t.NamedTuple):

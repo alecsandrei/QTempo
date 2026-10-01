@@ -36,6 +36,8 @@ jobs:
       fail-fast: false
       matrix:
         qgis: ["3.34-noble", "ltr", "stable"]
+    env:
+      UV_LINK_MODE: copy
     steps:
       - uses: actions/checkout@v7
 

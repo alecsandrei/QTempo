@@ -35,7 +35,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        qgis: ["3.34-noble", "3.44-noble", "4.2-questing"]
+        qgis: ["3.34-noble", "ltr", "stable"]
     steps:
       - uses: actions/checkout@v7
 

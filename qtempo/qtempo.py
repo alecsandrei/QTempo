@@ -38,7 +38,7 @@ from qgis.PyQt.QtCore import (
     QTranslator,
     QUrl,
 )
-from qgis.PyQt.QtGui import QIcon
+from qgis.PyQt.QtGui import QIcon, QKeyEvent
 from qgis.PyQt.QtNetwork import QNetworkReply, QNetworkRequest
 from qgis.PyQt.QtWidgets import (
     QAction,
@@ -112,6 +112,13 @@ UI_Dialog = uic.loadUiType(Asset.DIALOG.value.as_posix())[0]
 
 # The pivot service returns no data for a dimension with more options
 MAX_QUERY_OPTIONS = 1000
+TUTORIAL_STEPS = (
+    'dataset',
+    'data_table',
+    'query',
+    'request',
+    'table_options',
+)
 
 
 class Dialog(QDialog, UI_Dialog):  # type: ignore
@@ -122,6 +129,13 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.request_handler = RequestHandler(self.qtempo.network_manager, self)
         self.progress_item: QgsMessageBarItem | None = None
         self.focus_widget: QWidget | None = None
+        self.tutorial_step = -1
+        self.tutorial_target: QWidget | None = None
+        self.tutorial_target_style = ''
+        self.tutorial_last_complete = False
+        self.tutorial_displayed_step: str | None = None
+        self.join_signature: tuple[object, ...] | None = None
+        self.tutorialPanel.hide()
         # Deleting the dialog uninstalls it
         self.translator = QTranslator(self)
         language = self.load_language()
@@ -160,6 +174,28 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         )
         self.pushButtonValidateJoin.clicked.connect(self.validate_join)
         self.pushButtonJoinReport.clicked.connect(self.display_join_report)
+        self.pushButtonTutorial.clicked.connect(self.start_tutorial)
+        self.pushButtonTutorialBack.clicked.connect(self.tutorial_back)
+        self.pushButtonTutorialNext.clicked.connect(self.tutorial_next)
+        self.pushButtonTutorialExit.clicked.connect(self.exit_tutorial)
+        self.tabWidgetMatrix.currentChanged.connect(
+            lambda _: self.show_tutorial_step(switch_tab=False)
+        )
+        self.treeWidgetTableOfContents.itemSelectionChanged.connect(
+            self.show_tutorial_step
+        )
+        self.listWidgetMatrices.itemSelectionChanged.connect(
+            self.show_tutorial_step
+        )
+        self.listWidgetServices.itemSelectionChanged.connect(
+            self.show_tutorial_step
+        )
+        for combo in (
+            self.comboBoxGiscoYear,
+            self.comboBoxGiscoScale,
+            self.comboBoxGiscoProjection,
+        ):
+            combo.currentIndexChanged.connect(self.show_tutorial_step)
 
         # tasks
         self.nuts_index_task: nuts.FetchNutsIndexTask | None = None
@@ -232,6 +268,529 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         )
         self.messageBar = t.cast(QgsMessageBar, self.messageBar)
         self.buttonBox = t.cast(QDialogButtonBox, self.buttonBox)
+        self.tutorialPanel = t.cast(QFrame, self.tutorialPanel)
+        self.labelTutorialStep = t.cast(QLabel, self.labelTutorialStep)
+        self.labelTutorialText = t.cast(QLabel, self.labelTutorialText)
+        self.pushButtonTutorial = t.cast(QPushButton, self.pushButtonTutorial)
+        self.pushButtonTutorialBack = t.cast(
+            QPushButton, self.pushButtonTutorialBack
+        )
+        self.pushButtonTutorialNext = t.cast(
+            QPushButton, self.pushButtonTutorialNext
+        )
+        self.pushButtonTutorialExit = t.cast(
+            QPushButton, self.pushButtonTutorialExit
+        )
+
+    def start_tutorial(self) -> None:
+        """Start a manual tour without changing data or query selections."""
+        self.tutorial_step = 0
+        self.tutorial_displayed_step = None
+        self.tutorial_last_complete = self._tutorial_complete()
+        self.tutorialPanel.show()
+        self.show_tutorial_step()
+
+    def exit_tutorial(self) -> None:
+        """Hide the tour and restore normal dialog controls."""
+        self._highlight_tutorial_target(None)
+        self.tutorialPanel.hide()
+        self.tutorial_step = -1
+        self.tutorial_last_complete = False
+        self.tutorial_displayed_step = None
+        self._restore_tutorial_controls()
+
+    def tutorial_back(self) -> None:
+        """Move to the previous tour step."""
+        if self.tutorial_step > 0:
+            self.tutorial_step -= 1
+            self.tutorial_last_complete = self._tutorial_complete()
+            self.show_tutorial_step()
+
+    def tutorial_next(self) -> None:
+        """Move to the next tour step."""
+        if self.tutorial_step < 0 or not self._tutorial_complete():
+            return
+        steps = self._tutorial_steps()
+        if self.tutorial_step >= len(steps) - 1:
+            self.exit_tutorial()
+            return
+        self.tutorial_step += 1
+        self.tutorial_last_complete = self._tutorial_complete()
+        self.show_tutorial_step()
+
+    def _auto_advance_tutorial_step(self, step: int) -> None:
+        """Advance only if the completed step is still active."""
+        if sip.isdeleted(self):  # pyright: ignore[reportAttributeAccessIssue]
+            return
+        if self.tutorial_step == step and self._tutorial_complete():
+            self.tutorial_next()
+
+    def _focus_tutorial_control(self, step: str) -> None:
+        """Focus the active values or table after navigation is clicked."""
+        if sip.isdeleted(self):  # pyright: ignore[reportAttributeAccessIssue]
+            return
+        if (
+            self.tutorial_step < 0
+            or self._tutorial_steps()[self.tutorial_step] != step
+        ):
+            return
+        if step == 'query':
+            lists = get_children(self.frameQuery, QListWidgetAlwaysSelected)
+            if lists:
+                lists[0].setFocus()
+        elif self.tabWidgetMatrix.currentIndex() == Tabs.TABLE.value:
+            self.tableViewMatrix.setFocus()
+
+    def _tutorial_steps(self) -> tuple[str, ...]:
+        """Require mapping when the selected data has geographic units."""
+        matrix = self.get_matrix()
+        if matrix is None or not matrix.has_units:
+            return (*TUTORIAL_STEPS, 'table_layer')
+        is_nuts = self.get_map_levels(matrix)[0].is_nuts
+        return (
+            *TUTORIAL_STEPS,
+            'boundaries',
+            *(('join',) if is_nuts else ()),
+            'vector_layer',
+        )
+
+    def _query_signature(self) -> tuple[str, ...]:
+        """Identify the selected values across all loaded dimensions."""
+        return tuple(self.construct_queries())
+
+    def _data_is_current(self) -> bool:
+        item = self.listWidgetMatrices.currentItem()
+        return bool(
+            item is not None
+            and self.get_matrix() is not None
+            and self._query_signature()
+            and item.data(QListWidgetItemRole.QUERY_SIGNATURE.value)
+            == self._query_signature()
+        )
+
+    def _table_options_valid(self) -> bool:
+        matrix = self.get_matrix()
+        if not self._data_is_current() or matrix is None:
+            return False
+        if self.get_model_matrix() is None:
+            return False
+        if not matrix.has_units:
+            return True
+        layout = self.frameTableOptions.layout()
+        if layout is None:
+            return False
+        combo_boxes = get_widgets(layout, QComboBox)
+        expected = sum(
+            len(matrix.distinct(field_)) > 1 for field_ in matrix.dimensions
+        )
+        if len(combo_boxes) != expected:
+            return False
+        return all(
+            combo.currentIndex() >= 0
+            and (
+                combo.currentData() is None
+                or combo.currentData()
+                in [combo.itemData(i) for i in range(combo.count())]
+            )
+            for combo in combo_boxes
+        )
+
+    def _boundary_signature(self) -> tuple[object, ...] | None:
+        matrix = self.get_matrix()
+        if matrix is None or not matrix.has_units:
+            return None
+        if self.get_map_levels(matrix)[0].is_nuts:
+            year = self.comboBoxGiscoYear.currentText()
+            scale = self.comboBoxGiscoScale.currentText()
+            projection = self.comboBoxGiscoProjection.currentText()
+            available = self.get_nuts_units()
+            if not all((year, scale, projection)) or not available:
+                return None
+            return (id(matrix), year, scale, projection)
+        service = self._selected_service()
+        return (id(matrix), service.short_name) if service else None
+
+    def _selected_service(self) -> services.Service | None:
+        items = self.listWidgetServices.selectedItems()
+        if not items:
+            return None
+        return t.cast(
+            services.Service, items[0].data(QListWidgetItemRole.SERVICE.value)
+        )
+
+    def _layer_signature(self) -> str:
+        """Identify data, table choices and boundary settings for a layer."""
+        matrix = self.get_matrix()
+        fixed = (
+            tuple(
+                sorted(
+                    (field_.name, value)
+                    for field_, value in self.get_fixed(matrix).items()
+                )
+            )
+            if matrix is not None and matrix.has_units
+            else ()
+        )
+        return repr(
+            (self._query_signature(), fixed, self._boundary_signature())
+        )
+
+    def _matching_layers(self, spatial: bool) -> bool:
+        """Check that the current table or each mapped level is in QGIS."""
+        matrix = self.get_matrix()
+        model = self.get_model_matrix()
+        code = self.get_matrix_code()
+        project = QgsProject.instance()
+        if matrix is None or model is None or code is None or project is None:
+            return False
+        names = (
+            [f'{code} — {level.label}' for level in self.get_map_levels(matrix)]
+            if spatial
+            else [code]
+        )
+        layers = project.mapLayers().values()
+        expected_fields = {field_.name for field_ in model.fields}
+        signature = self._layer_signature()
+        return all(
+            any(
+                isinstance(layer, QgsVectorLayer)
+                and layer.name() == name
+                and layer.isSpatial() == spatial
+                and expected_fields.issubset(set(layer.fields().names()))
+                and layer.customProperty('qtempo/tutorial_signature', signature)
+                == signature
+                for layer in layers
+            )
+            for name in names
+        )
+
+    def _tutorial_complete(self) -> bool:
+        """Evaluate the active step from current dialog and project state."""
+        steps = self._tutorial_steps()
+        if not 0 <= self.tutorial_step < len(steps):
+            return False
+        step = steps[self.tutorial_step]
+        if step == 'dataset':
+            selected = self.treeWidgetTableOfContents.selectedItems()
+            if not selected or selected[0].childCount():
+                return False
+            node = selected[0].data(0, QTreeWidgetItemRole.NODE.value)
+            if not node:
+                return False
+            code = node['context']['code']
+            items = get_list_widget_items(self.listWidgetMatrices)
+            return bool(items) and all(
+                item.data(QListWidgetItemRole.PARENT_NODE.value)['context'][
+                    'code'
+                ]
+                == code
+                for item in items
+            )
+        if step == 'data_table':
+            item = self.listWidgetMatrices.currentItem()
+            if item is None or not item.isSelected():
+                return False
+            leaf = item.data(QListWidgetItemRole.LEAF_NODE.value)
+            return bool(
+                leaf is not None
+                and len(get_children(self.frameQuery, QListWidget))
+                == len(leaf['dimensionsMap'])
+            )
+        if step == 'query':
+            widgets = get_children(self.frameQuery, QListWidget)
+            return bool(widgets) and all(
+                widget.selectedItems() for widget in widgets
+            )
+        if step == 'request':
+            return self._data_is_current()
+        if step == 'table_options':
+            return self._table_options_valid()
+        if step == 'table_layer':
+            return self._matching_layers(False)
+        if step == 'boundaries':
+            return self._boundary_signature() is not None
+        if step == 'join':
+            signature = self._boundary_signature()
+            return signature is not None and self.join_signature == signature
+        if step == 'vector_layer':
+            return self._matching_layers(True)
+        return False
+
+    def _restore_tutorial_controls(self) -> None:
+        """Restore normal control states after a step or the whole tour."""
+        if self.request_handler.replies:
+            return
+        for widget in (
+            self.lineEditSearch,
+            self.treeWidgetTableOfContents,
+            self.listWidgetMatrices,
+            self.tabWidgetMatrix,
+            self.scrollAreaQuery,
+            self.pushButtonRequestData,
+            self.tableViewMatrix,
+            self.mGroupBoxTableOptions,
+            self.pushButtonAddTableLayer,
+            self.mGroupBoxServices,
+            self.pushButtonServiceInformation,
+            self.mGroupBoxGisco,
+            self.pushButtonValidateJoin,
+            self.pushButtonJoinReport,
+            self.tableWidgetDownloads,
+            self.pushButtonAddVectorLayer,
+            self.checkBoxEnglish,
+            self.checkBoxRomanian,
+            self.buttonBox,
+            self.pushButtonTutorial,
+        ):
+            widget.setEnabled(True)
+        matrix = self.get_matrix()
+        self.tabWidgetMatrix.setTabEnabled(Tabs.QUERY.value, True)
+        self.tabWidgetMatrix.setTabEnabled(Tabs.TABLE.value, True)
+        self.tabWidgetMatrix.setTabEnabled(
+            Tabs.MAP.value, matrix is not None and matrix.has_units
+        )
+        self.tabWidgetMatrix.tabBar().setEnabled(True)
+        self.pushButtonAddTableLayer.setEnabled(
+            self.get_model_matrix() is not None
+        )
+        self.pushButtonAddVectorLayer.setEnabled(
+            matrix is not None
+            and matrix.has_units
+            and (self.downloader is None or not self.downloader.is_running)
+            and self.localities_task is None
+        )
+        self.pushButtonJoinReport.setEnabled(self.join_signature is not None)
+
+    def _apply_tutorial_lock(self) -> None:
+        """Enable only controls needed for the active manual action."""
+        if self.request_handler.replies:
+            return
+        focused = self.focusWidget()
+        self._restore_tutorial_controls()
+        step = self._tutorial_steps()[self.tutorial_step]
+        for widget in (
+            self.lineEditSearch,
+            self.treeWidgetTableOfContents,
+            self.listWidgetMatrices,
+            self.scrollAreaQuery,
+            self.pushButtonRequestData,
+            self.tableViewMatrix,
+            self.mGroupBoxTableOptions,
+            self.pushButtonAddTableLayer,
+            self.mGroupBoxServices,
+            self.pushButtonServiceInformation,
+            self.mGroupBoxGisco,
+            self.pushButtonValidateJoin,
+            self.pushButtonJoinReport,
+            self.tableWidgetDownloads,
+            self.pushButtonAddVectorLayer,
+            self.checkBoxEnglish,
+            self.checkBoxRomanian,
+            self.buttonBox,
+            self.pushButtonTutorial,
+        ):
+            widget.setEnabled(False)
+        self.tabWidgetMatrix.tabBar().setEnabled(False)
+        if step == 'dataset':
+            self.lineEditSearch.setEnabled(True)
+            self.treeWidgetTableOfContents.setEnabled(True)
+        elif step == 'data_table':
+            self.listWidgetMatrices.setEnabled(True)
+        elif step in ('query', 'request'):
+            if step == 'query':
+                self.scrollAreaQuery.setEnabled(True)
+            else:
+                self.pushButtonRequestData.setEnabled(True)
+        elif step in ('table_options', 'table_layer'):
+            self.tableViewMatrix.setEnabled(True)
+            if step == 'table_options':
+                self.mGroupBoxTableOptions.setEnabled(True)
+            else:
+                self.pushButtonAddTableLayer.setEnabled(True)
+        else:
+            if step == 'boundaries':
+                matrix = self.get_matrix()
+                if (
+                    matrix is not None
+                    and self.get_map_levels(matrix)[0].is_nuts
+                ):
+                    self.mGroupBoxGisco.setEnabled(True)
+                    self.pushButtonValidateJoin.setEnabled(False)
+                    self.pushButtonJoinReport.setEnabled(False)
+                else:
+                    self.mGroupBoxServices.setEnabled(True)
+                    self.pushButtonServiceInformation.setEnabled(True)
+            elif step == 'join':
+                self.mGroupBoxGisco.setEnabled(True)
+                for combo in (
+                    self.comboBoxGiscoYear,
+                    self.comboBoxGiscoScale,
+                    self.comboBoxGiscoProjection,
+                ):
+                    combo.setEnabled(False)
+                self.pushButtonValidateJoin.setEnabled(True)
+                self.pushButtonJoinReport.setEnabled(bool(self.join_report))
+            elif step == 'vector_layer':
+                self.tableWidgetDownloads.setEnabled(True)
+                self.pushButtonAddVectorLayer.setEnabled(
+                    (self.downloader is None or not self.downloader.is_running)
+                    and self.localities_task is None
+                )
+        if (
+            focused is not None
+            and not sip.isdeleted(focused)  # pyright: ignore[reportAttributeAccessIssue]
+            and focused.isEnabled()
+            and focused.isVisible()
+            and self.isActiveWindow()
+        ):
+            focused.setFocus()
+
+    def _highlight_tutorial_target(self, target: QWidget | None) -> None:
+        """Move the temporary outline from one control to another."""
+        if self.tutorial_target is not None:
+            self.tutorial_target.setStyleSheet(self.tutorial_target_style)
+        self.tutorial_target = target
+        if target is not None:
+            self.tutorial_target_style = target.styleSheet()
+            target.setStyleSheet(
+                f'{self.tutorial_target_style}; border: 3px solid #d88700;'
+            )
+
+    def show_tutorial_step(self, switch_tab: bool = True) -> None:
+        """Refresh guidance, the current gate, and the control lock."""
+        if self.tutorial_step < 0:
+            return
+        steps = self._tutorial_steps()
+        step = steps[self.tutorial_step]
+        matrix = self.get_matrix()
+        is_nuts = bool(
+            matrix is not None
+            and matrix.has_units
+            and self.get_map_levels(matrix)[0].is_nuts
+        )
+        tab = {
+            'query': Tabs.QUERY,
+            'request': Tabs.QUERY,
+            'table_options': Tabs.TABLE,
+            'table_layer': Tabs.TABLE,
+            'boundaries': Tabs.MAP,
+            'join': Tabs.MAP,
+            'vector_layer': Tabs.MAP,
+        }.get(step)
+        if switch_tab and tab is not None:
+            self.tabWidgetMatrix.setCurrentIndex(tab.value)
+        guidance: dict[str, tuple[QWidget, str]] = {
+            'dataset': (
+                self.treeWidgetTableOfContents,
+                self.tr(
+                    'Search optionally, then choose a dataset to load its data tables.'
+                ),
+            ),
+            'data_table': (
+                self.listWidgetMatrices,
+                self.tr('Choose a data table to load its query controls.'),
+            ),
+            'query': (
+                self.scrollAreaQuery,
+                self.tr('Select the values to include in the query.'),
+            ),
+            'request': (
+                self.pushButtonRequestData,
+                self.tr('Request data for the selected values.'),
+            ),
+            'table_options': (
+                self.mGroupBoxTableOptions,
+                self.tr('Choose which values become table columns.'),
+            ),
+            'table_layer': (
+                self.pushButtonAddTableLayer,
+                self.tr('Add the displayed table as a QGIS layer.'),
+            ),
+            'boundaries': (
+                self.mGroupBoxGisco if is_nuts else self.mGroupBoxServices,
+                self.tr(
+                    'Choose the year, scale and projection of the boundary '
+                    'dataset from GISCO NUTS.'
+                )
+                if is_nuts
+                else self.tr('Choose GISCO LAU or Communes for localities.'),
+            ),
+            'join': (
+                self.pushButtonValidateJoin,
+                self.tr('Validate the NUTS join and inspect unmatched units.'),
+            ),
+            'vector_layer': (
+                self.pushButtonAddVectorLayer,
+                self.tr('Add the geographic data as vector layers.'),
+            ),
+        }
+        target, description = guidance[step]
+        if (
+            step == 'table_options'
+            and matrix is not None
+            and not matrix.has_units
+        ):
+            target = self.tableViewMatrix
+            description = self.tr(
+                'This data table has no geographic units. Its table is ready.'
+            )
+        elif step == 'table_options' and matrix is not None:
+            layout = self.frameTableOptions.layout()
+            if layout is None or not get_widgets(layout, QComboBox):
+                target = self.tableViewMatrix
+                description = self.tr(
+                    'The table is ready; no column options are needed.'
+                )
+        self._highlight_tutorial_target(target)
+        self.labelTutorialStep.setText(
+            self.tr('Step {current} of {total}').format(
+                current=self.tutorial_step + 1, total=len(steps)
+            )
+        )
+        self.labelTutorialText.setText(description)
+        self._apply_tutorial_lock()
+        if (
+            step != self.tutorial_displayed_step
+            and (
+                step == 'query'
+                or (
+                    step in ('table_options', 'table_layer')
+                    and self.tabWidgetMatrix.currentIndex() == Tabs.TABLE.value
+                )
+            )
+            and not self.request_handler.replies
+        ):
+            QTimer.singleShot(0, partial(self._focus_tutorial_control, step))
+        self.tutorial_displayed_step = step
+        self.pushButtonTutorialBack.setEnabled(self.tutorial_step > 0)
+        complete = self._tutorial_complete()
+        self.pushButtonTutorialNext.setEnabled(complete)
+        if (
+            complete
+            and not self.tutorial_last_complete
+            and not self.request_handler.replies
+        ):
+            QTimer.singleShot(
+                0, partial(self._auto_advance_tutorial_step, self.tutorial_step)
+            )
+        if not self.request_handler.replies:
+            self.tutorial_last_complete = complete
+
+    def keyPressEvent(self, a0: QKeyEvent | None) -> None:
+        """Let Escape leave the guide without closing the dialog."""
+        if a0 is None:
+            return
+        if a0.key() == Qt.Key.Key_Escape and self.tutorial_step >= 0:
+            self.exit_tutorial()
+            a0.accept()
+        else:
+            super().keyPressEvent(a0)
+
+    def done(self, a0: int) -> None:
+        """Reset the tour when the dialog closes."""
+        if self.tutorial_step >= 0:
+            self.exit_tutorial()
+        super().done(a0)
 
     def display_dialog(self) -> None:
         """Shows the dialog, or brings it back above QGIS if it is already
@@ -360,6 +919,8 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                 services.Service, item.data(QListWidgetItemRole.SERVICE.value)
             )
             item.setText(service.full_name)
+        if self.tutorial_step >= 0:
+            self.show_tutorial_step()
 
     def switch_language_table_of_contents(self):
         nodes = t.cast(
@@ -396,7 +957,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             self.preprocess_url(
                 URL.CONTEXT.value.format(code=node['context']['code'])
             ),
-            self.tr('Loading the matrices of {name}').format(
+            self.tr('Loading the data tables of {name}').format(
                 name=parse_node_name(node['context']['name'])
             ),
         )
@@ -475,7 +1036,10 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.reset_downloads()
 
     def get_selected_dataset(self) -> QTreeWidgetItem | None:
-        selected_item = self.treeWidgetTableOfContents.selectedItems()[0]
+        selected = self.treeWidgetTableOfContents.selectedItems()
+        if not selected:
+            return None
+        selected_item = selected[0]
         if selected_item.childCount():  # there should be a better check I guess
             return None
         return selected_item
@@ -499,7 +1063,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             self.preprocess_url(
                 URL.CONTEXT.value.format(code=node['context']['code'])
             ),
-            self.tr('Loading the matrices of {name}').format(
+            self.tr('Loading the data tables of {name}').format(
                 name=selected_dataset.text(0)
             ),
         )
@@ -516,6 +1080,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                     f'[{child["code"]}] {parse_node_name(child["name"])}'
                 )
                 self.listWidgetMatrices.addItem(item)
+            self.show_tutorial_step()
 
         reply.finished.connect(add_items)
 
@@ -652,6 +1217,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             self.add_leaf_node_to_list_widget_item(leaf_node)
             if leaf_node is not None:
                 self.add_dimensions_to_frame_query(leaf_node['dimensionsMap'])
+            self.show_tutorial_step()
 
         if reply is not None:
             reply.finished.connect(add_dimensions)
@@ -714,6 +1280,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                 ].itemSelectionChanged.connect(self.set_query_children_hidden)
                 has_parent = False
             list_widget.setMinimumWidth(list_widget.width() + 5)
+            list_widget.itemSelectionChanged.connect(self.show_tutorial_step)
 
     def construct_queries(self) -> list[str]:
         """The encoded queries of the selected options. A dimension with
@@ -802,6 +1369,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                 combo_box.setCurrentIndex(0)
             combo_box.setProperty(WidgetProperty.FIELD.value, field_)
             combo_box.currentIndexChanged.connect(self.update_table_view)
+            combo_box.currentIndexChanged.connect(self.show_tutorial_step)
             row, column = divmod(i, 2)
             layout.addWidget(label, row, column * 2)
             layout.addWidget(combo_box, row, column * 2 + 1)
@@ -844,6 +1412,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         rows = self.tr('%n row(s)', '', len(shown.data))
         columns = self.tr('%n column(s)', '', len(shown.fields))
         self.labelTableSummary.setText(f'{rows} × {columns}')
+        self.show_tutorial_step()
 
     def get_map_levels(self, matrix: Matrix) -> list[Level]:
         """The levels to map, one layer each. The national total is only
@@ -895,6 +1464,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             return None
         if task.status() == QgsTask.TaskStatus.Complete:
             self.fill_nuts_combo_boxes()
+            self.show_tutorial_step()
 
     def fill_nuts_combo_boxes(self) -> None:
         if not self.comboBoxGiscoYear.count():
@@ -958,13 +1528,17 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                 '%n label(s) could not be mapped.', '', len(unresolved)
             )
         self.join_report = report
+        self.join_signature = self._boundary_signature()
         self.labelJoinStatus.setText(text)
         self.pushButtonJoinReport.setEnabled(True)
+        self.show_tutorial_step()
 
     def reset_join_report(self) -> None:
         self.join_report = []
+        self.join_signature = None
         self.labelJoinStatus.clear()
         self.pushButtonJoinReport.setEnabled(False)
+        self.show_tutorial_step()
 
     def reset_downloads(self) -> None:
         self.tableWidgetDownloads.clear()
@@ -1031,9 +1605,14 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                     current_item.data(QListWidgetItemRole.LEAF_NODE_RO.value),
                 ),
             )
+            current_item.setData(
+                QListWidgetItemRole.QUERY_SIGNATURE.value,
+                self._query_signature(),
+            )
             self.handle_map_tab()
             self.update_table()
             self.pushButtonAddTableLayer.setEnabled(True)
+            self.show_tutorial_step()
 
         post()
 
@@ -1176,6 +1755,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                 for level, level_matrix in by_level.items()
             ]
         )
+        self.show_tutorial_step()
 
     def add_localities_layer(self, matrix: Matrix) -> None:
         service = self.get_selected_service()
@@ -1220,6 +1800,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                 )
             ]
         )
+        self.show_tutorial_step()
 
     def handle_localities_error(self, task: FetchLocalitiesTask) -> None:
         self.localities_task = None
@@ -1233,9 +1814,14 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         project = QgsProject.instance()
         assert project is not None
         for layer in layers:
+            layer.setCustomProperty(
+                'qtempo/tutorial_signature',
+                self._layer_signature(),
+            )
             project.addMapLayer(layer)
         self.qtempo.iface.setActiveLayer(layers[0])
         self.qtempo.iface.zoomToActiveLayer()
+        self.show_tutorial_step()
 
     def cancel_tasks(self) -> None:
         if self.downloader is not None:
@@ -1252,6 +1838,11 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         instance = QgsProject().instance()
         assert instance
         instance.addMapLayer(table_layer)
+        table_layer.setCustomProperty(
+            'qtempo/tutorial_signature',
+            self._layer_signature(),
+        )
+        self.show_tutorial_step()
 
     def get_selected_service(self) -> services.Service | None:
         if not (items := self.listWidgetServices.selectedItems()):
@@ -1263,15 +1854,21 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
 
     def set_gui_state(self, state: bool) -> None:
         for obj in self.children():
-            if isinstance(obj, QWidget) and obj is not self.messageBar:
+            if isinstance(obj, QWidget) and obj not in (
+                self.messageBar,
+                self.tutorialPanel,
+            ):
                 obj.setEnabled(state)
 
     def enable_gui(self) -> None:
         self.set_gui_state(True)
+        if self.tutorial_step >= 0:
+            self.show_tutorial_step()
         # Disabling a widget takes away its focus
         widget = self.focus_widget
         if (
-            widget is not None
+            self.tutorial_step < 0
+            and widget is not None
             and not sip.isdeleted(widget)
             and widget.isVisible()
         ):

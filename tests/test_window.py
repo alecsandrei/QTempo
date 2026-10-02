@@ -7,6 +7,7 @@ import typing as t
 from types import SimpleNamespace
 
 import pytest
+from qgis.core import QgsProject
 from qgis.gui import QgisInterface
 from qgis.PyQt import sip
 from qgis.PyQt.QtCore import (
@@ -15,15 +16,25 @@ from qgis.PyQt.QtCore import (
     QEvent,
     QObject,
     QTimer,
+    Qt,
     pyqtSignal,
 )
 from qgis.PyQt.QtNetwork import QNetworkReply, QNetworkRequest
-from qgis.PyQt.QtWidgets import QApplication, QDialog, QWidget
+from qgis.PyQt.QtTest import QTest
+from qgis.PyQt.QtWidgets import (
+    QApplication,
+    QDialog,
+    QListWidget,
+    QListWidgetItem,
+    QWidget,
+)
 
+from qtempo.enums import QListWidgetItemRole, Tabs
 from qtempo.exceptions import RequestError
+from qtempo.matrix import Matrix
 from qtempo.qtempo import Dialog, QTempo
 
-from .helpers import wait_until
+from .helpers import agr101a, localities, not_geographic, wait_until
 
 
 class FakeReply(QObject):
@@ -42,6 +53,9 @@ class FakeReply(QObject):
 
     def readAll(self) -> QByteArray:
         return QByteArray(self.body)
+
+    def errorString(self) -> str:
+        return 'Simulated request failure'
 
     def succeed(self, body: bytes = b'') -> None:
         self.body = body
@@ -115,6 +129,479 @@ def messages(dialog: Dialog) -> list[str]:
 
 def requests(plugin: QTempo) -> list[FakeReply]:
     return t.cast(FakeManager, plugin.network_manager).replies
+
+
+def prepare_tutorial_work(dialog: Dialog, matrix: Matrix) -> None:
+    """Load a selected dataset, data table, values and returned data."""
+    from qgis.PyQt.QtCore import QSignalBlocker
+    from qgis.PyQt.QtWidgets import QTreeWidgetItem
+    from qtempo.enums import QTreeWidgetItemRole
+    from qtempo.utils import get_children
+    from .helpers import CATEGORIES, YEARS, request_body
+
+    node = {'context': {'code': 'parent', 'name': 'Dataset'}}
+    dataset = QTreeWidgetItem(dialog.treeWidgetTableOfContents)
+    dataset.setData(0, QTreeWidgetItemRole.NODE.value, node)
+    with QSignalBlocker(dialog.treeWidgetTableOfContents):
+        dialog.treeWidgetTableOfContents.setCurrentItem(dataset)
+    item = QListWidgetItem('Data table', dialog.listWidgetMatrices)
+    item.setData(QListWidgetItemRole.PARENT_NODE.value, node)
+    item.setData(QListWidgetItemRole.CONTEXT.value, {'code': 'TEST'})
+    leaf = {
+        'dimensionsMap': [CATEGORIES, YEARS],
+        'details': request_body(matTime=2),
+    }
+    item.setData(QListWidgetItemRole.LEAF_NODE.value, leaf)
+    item.setData(QListWidgetItemRole.LEAF_NODE_RO.value, leaf)
+    with QSignalBlocker(dialog.listWidgetMatrices):
+        dialog.listWidgetMatrices.setCurrentItem(item)
+    dialog.add_dimensions_to_frame_query(leaf['dimensionsMap'])
+    for widget in get_children(dialog.frameQuery, QListWidget):
+        with QSignalBlocker(widget):
+            widget.item(0).setSelected(True)
+    item.setData(QListWidgetItemRole.MATRIX.value, matrix)
+    item.setData(
+        QListWidgetItemRole.QUERY_SIGNATURE.value,
+        dialog._query_signature(),
+    )
+    dialog.tabWidgetMatrix.setTabEnabled(Tabs.MAP.value, matrix.has_units)
+    dialog.update_table()
+
+
+def go_to_tutorial_step(dialog: Dialog, name: str) -> None:
+    """Advance through completed steps with the visible Next control."""
+    while dialog._tutorial_steps()[dialog.tutorial_step] != name:
+        assert dialog.pushButtonTutorialNext.isEnabled()
+        dialog.pushButtonTutorialNext.click()
+
+
+def test_tutorial_gates_dataset_and_locks_other_controls(
+    dialog: Dialog,
+) -> None:
+    dialog.display_dialog()
+    dialog.pushButtonTutorial.click()
+    assert dialog.tutorial_step == 0
+    assert not dialog.pushButtonTutorialNext.isEnabled()
+    assert dialog.lineEditSearch.isEnabled()
+    assert dialog.treeWidgetTableOfContents.isEnabled()
+    assert not dialog.listWidgetMatrices.isEnabled()
+    assert not dialog.tableViewMatrix.isEnabled()
+    assert not dialog.checkBoxRomanian.isEnabled()
+    assert not dialog.buttonBox.isEnabled()
+    assert not dialog.pushButtonTutorial.isEnabled()
+    assert not dialog.tabWidgetMatrix.tabBar().isEnabled()
+    dialog.pushButtonTutorialNext.click()
+    assert dialog.tutorial_step == 0
+    dialog.pushButtonTutorialExit.click()
+    assert dialog.checkBoxRomanian.isEnabled()
+    assert dialog.buttonBox.isEnabled()
+    assert dialog.pushButtonTutorial.isEnabled()
+
+
+def test_tutorial_loads_dataset_and_data_table_before_advancing(
+    dialog: Dialog, manager: FakeManager
+) -> None:
+    from qgis.PyQt.QtWidgets import QTreeWidgetItem
+    from qtempo.enums import QTreeWidgetItemRole
+    from .helpers import CATEGORIES, YEARS, request_body
+
+    node = {
+        'context': {'code': 'parent', 'name': 'Dataset'},
+        'children': [
+            {'code': 'TEST', 'name': 'Data table', 'childrenUrl': 'matrix'}
+        ],
+    }
+    dataset = QTreeWidgetItem(dialog.treeWidgetTableOfContents)
+    dataset.setData(0, QTreeWidgetItemRole.NODE.value, node)
+    dialog.pushButtonTutorial.click()
+    dialog.treeWidgetTableOfContents.setCurrentItem(dataset)
+    assert dialog.tutorial_step == 0
+    assert not dialog.pushButtonTutorialNext.isEnabled()
+    assert len(manager.replies) == 1
+    manager.replies[0].succeed(json.dumps(node).encode())
+    wait_until(lambda: dialog.tutorial_step == 1)
+    assert dialog.listWidgetMatrices.isEnabled()
+    assert not dialog.pushButtonTutorialNext.isEnabled()
+    dialog.listWidgetMatrices.setCurrentRow(0)
+    leaf = {
+        'dimensionsMap': [CATEGORIES, YEARS],
+        'details': request_body(matTime=2),
+    }
+    manager.replies[1].succeed(json.dumps(leaf).encode())
+    if len(manager.replies) > 2:
+        manager.replies[2].succeed(json.dumps(leaf).encode())
+    wait_until(lambda: dialog.tutorial_step == 2)
+    assert dialog.scrollAreaQuery.isEnabled()
+    assert dialog.pushButtonTutorialNext.isEnabled()
+
+
+def test_tutorial_existing_work_table_route_and_escape(
+    dialog: Dialog, manager: FakeManager, qgis_new_project: None
+) -> None:
+    prepare_tutorial_work(dialog, not_geographic())
+    project = QgsProject.instance()
+    assert project is not None
+    before = set(project.mapLayers())
+    dialog.display_dialog()
+    dialog.pushButtonTutorial.click()
+    go_to_tutorial_step(dialog, 'table_layer')
+    assert dialog.tabWidgetMatrix.currentIndex() == Tabs.TABLE.value
+    assert dialog.labelTutorialStep.text() == 'Step 6 of 6'
+    assert not dialog.tabWidgetMatrix.isTabEnabled(Tabs.MAP.value)
+    assert not dialog.tabWidgetMatrix.tabBar().isEnabled()
+    assert 'boundaries' not in dialog._tutorial_steps()
+    assert dialog.pushButtonAddTableLayer.isEnabled()
+    assert not dialog.pushButtonTutorialNext.isEnabled()
+    assert manager.replies == []
+    assert set(project.mapLayers()) == before
+    dialog.pushButtonTutorialBack.click()
+    assert dialog._tutorial_steps()[dialog.tutorial_step] == 'table_options'
+    dialog.pushButtonTutorialNext.click()
+    assert dialog._tutorial_steps()[dialog.tutorial_step] == 'table_layer'
+    dialog.add_table_layer()
+    wait_until(lambda: dialog.tutorial_step == -1)
+    assert len(project.mapLayers()) == len(before) + 1
+    dialog.pushButtonTutorial.click()
+    assert dialog.tutorial_step == 0
+    QTest.keyClick(dialog, Qt.Key.Key_Escape)
+    assert dialog.tutorial_step == -1
+    assert dialog.isVisible()
+    dialog.pushButtonTutorial.click()
+    dialog.reject()
+    assert dialog.tutorial_step == -1
+
+
+def test_tutorial_query_and_request_stale_data(
+    dialog: Dialog, qgis_new_project: None
+) -> None:
+    from qtempo.utils import get_children
+    from qgis.PyQt.QtWidgets import QListWidget
+
+    prepare_tutorial_work(dialog, not_geographic())
+    dialog.pushButtonTutorial.click()
+    go_to_tutorial_step(dialog, 'query')
+    assert dialog.scrollAreaQuery.isEnabled()
+    assert not dialog.pushButtonRequestData.isEnabled()
+    dialog.pushButtonTutorialNext.click()
+    assert dialog.pushButtonRequestData.isEnabled()
+    assert not dialog.scrollAreaQuery.isEnabled()
+    assert dialog.pushButtonTutorialNext.isEnabled()
+    dialog.pushButtonTutorialBack.click()
+    widgets = get_children(dialog.frameQuery, QListWidget)
+    widgets[0].item(1).setSelected(True)
+    dialog.pushButtonTutorialNext.click()
+    assert dialog.tutorial_step == 3
+    assert not dialog.pushButtonTutorialNext.isEnabled()
+    dialog.pushButtonTutorialBack.click()
+    widgets[0].item(1).setSelected(False)
+    dialog.pushButtonTutorialNext.click()
+    assert dialog.tutorial_step == 3
+    assert dialog.pushButtonTutorialNext.isEnabled()
+
+
+def test_tutorial_query_ctrl_a_selects_all_visible_options(
+    dialog: Dialog, qgis_new_project: None
+) -> None:
+    from qtempo.utils import get_children
+
+    prepare_tutorial_work(dialog, not_geographic())
+    dialog.display_dialog()
+    wait_until(dialog.isActiveWindow)
+    dialog.pushButtonTutorial.click()
+    go_to_tutorial_step(dialog, 'query')
+    options = get_children(dialog.frameQuery, QListWidget)[0]
+    assert options.count() > 1
+    wait_until(options.hasFocus)
+    QTest.mouseClick(
+        options.viewport(),
+        Qt.MouseButton.LeftButton,
+        pos=options.visualItemRect(options.item(1)).center(),
+    )
+    assert options.hasFocus()
+    QTest.keyClick(
+        t.cast(QWidget, QApplication.focusWidget()),
+        Qt.Key.Key_A,
+        Qt.KeyboardModifier.ControlModifier,
+    )
+    assert len(options.selectedItems()) == options.count()
+    assert options.hasFocus()
+
+
+def test_tutorial_table_options_require_valid_current_choices(
+    dialog: Dialog, qgis_new_project: None
+) -> None:
+    from qtempo.utils import get_widgets
+    from qgis.PyQt.QtWidgets import QComboBox
+
+    prepare_tutorial_work(dialog, agr101a())
+    dialog.pushButtonTutorial.click()
+    go_to_tutorial_step(dialog, 'table_options')
+    layout = dialog.frameTableOptions.layout()
+    assert layout is not None
+    combos = get_widgets(layout, QComboBox)
+    assert combos
+    assert dialog.pushButtonTutorialNext.isEnabled()
+    combos[0].setCurrentIndex(-1)
+    assert not dialog.pushButtonTutorialNext.isEnabled()
+    combos[0].setCurrentIndex(0)
+    wait_until(
+        lambda: dialog._tutorial_steps()[dialog.tutorial_step] == 'boundaries'
+    )
+
+
+def test_tutorial_omits_column_choice_prompt_without_combos(
+    dialog: Dialog, qgis_new_project: None
+) -> None:
+    from qgis.PyQt.QtWidgets import QComboBox
+    from qtempo.utils import get_widgets
+
+    prepare_tutorial_work(dialog, localities())
+    dialog.pushButtonTutorial.click()
+    go_to_tutorial_step(dialog, 'table_options')
+    layout = dialog.frameTableOptions.layout()
+    assert layout is not None
+    assert get_widgets(layout, QComboBox) == []
+    assert dialog.labelTutorialText.text() == (
+        'The table is ready; no column options are needed.'
+    )
+    assert dialog.pushButtonTutorialNext.isEnabled()
+    dialog.set_language('ro')
+    assert dialog.labelTutorialText.text() == (
+        'Tabelul este pregătit; nu sunt necesare opțiuni pentru coloane.'
+    )
+
+
+def test_tutorial_accepts_an_existing_matching_table_layer(
+    dialog: Dialog, qgis_new_project: None
+) -> None:
+    prepare_tutorial_work(dialog, not_geographic())
+    dialog.add_table_layer()
+    dialog.pushButtonTutorial.click()
+    go_to_tutorial_step(dialog, 'table_layer')
+    assert dialog.pushButtonTutorialNext.isEnabled()
+    dialog.pushButtonTutorialNext.click()
+    assert dialog.tutorial_step == -1
+
+
+@pytest.mark.parametrize(
+    ('step', 'matrix_factory'),
+    [('table_options', agr101a), ('table_layer', not_geographic)],
+)
+def test_tutorial_table_keeps_select_all_shortcut(
+    dialog: Dialog,
+    qgis_new_project: None,
+    step: str,
+    matrix_factory: c.Callable[[], Matrix],
+) -> None:
+    prepare_tutorial_work(dialog, matrix_factory())
+    dialog.display_dialog()
+    wait_until(dialog.isActiveWindow)
+    dialog.pushButtonTutorial.click()
+    go_to_tutorial_step(dialog, step)
+    wait_until(dialog.tableViewMatrix.hasFocus)
+    QTest.keyClick(
+        t.cast(QWidget, QApplication.focusWidget()),
+        Qt.Key.Key_A,
+        Qt.KeyboardModifier.ControlModifier,
+    )
+    selection = dialog.tableViewMatrix.selectionModel()
+    assert selection is not None
+    model = dialog.tableViewMatrix.model()
+    assert model is not None
+    assert (
+        len(selection.selectedIndexes())
+        == model.rowCount() * model.columnCount()
+    )
+
+
+def test_escape_exits_tutorial_from_the_table(
+    dialog: Dialog, qgis_new_project: None
+) -> None:
+    prepare_tutorial_work(dialog, not_geographic())
+    dialog.display_dialog()
+    wait_until(dialog.isActiveWindow)
+    dialog.pushButtonTutorial.click()
+    go_to_tutorial_step(dialog, 'table_options')
+    wait_until(dialog.tableViewMatrix.hasFocus)
+    QTest.keyClick(dialog.tableViewMatrix, Qt.Key.Key_Escape)
+    assert dialog.tutorial_step == -1
+    assert dialog.isVisible()
+
+
+def test_tutorial_request_failure_keeps_gate_closed(
+    dialog: Dialog, manager: FakeManager, qgis_new_project: None
+) -> None:
+    prepare_tutorial_work(dialog, not_geographic())
+    item = dialog.listWidgetMatrices.currentItem()
+    assert item is not None
+    item.setData(QListWidgetItemRole.MATRIX.value, None)
+    dialog.clear_table()
+    errors: list[Exception] = []
+    dialog.qtempo._handle_error_signal = errors.append
+    dialog.pushButtonTutorial.click()
+    go_to_tutorial_step(dialog, 'request')
+    assert not dialog.pushButtonTutorialNext.isEnabled()
+    dialog.pushButtonRequestData.click()
+    assert not dialog.pushButtonRequestData.isEnabled()
+    assert dialog.pushButtonTutorialExit.isEnabled()
+    manager.replies[-1].fail()
+    wait_until(lambda: not dialog.request_handler.replies)
+    assert errors
+    assert dialog.tutorial_step == 3
+    assert not dialog.pushButtonTutorialNext.isEnabled()
+    assert dialog.pushButtonRequestData.isEnabled()
+
+
+def test_tutorial_successful_request_advances_after_data_is_loaded(
+    dialog: Dialog, manager: FakeManager, qgis_new_project: None
+) -> None:
+    from .helpers import pivot
+
+    prepare_tutorial_work(dialog, not_geographic())
+    item = dialog.listWidgetMatrices.currentItem()
+    assert item is not None
+    item.setData(QListWidgetItemRole.MATRIX.value, None)
+    dialog.clear_table()
+    dialog.pushButtonTutorial.click()
+    go_to_tutorial_step(dialog, 'request')
+    dialog.pushButtonRequestData.click()
+    assert dialog.tutorial_step == 3
+    assert not dialog.pushButtonTutorialNext.isEnabled()
+    manager.replies[-1].succeed(
+        pivot(
+            ['Categorii', 'Ani', 'Valoare'],
+            ['Agricola', 'Anul 1990', '1'],
+        )
+    )
+    wait_until(lambda: dialog.tutorial_step == 4)
+    assert dialog.get_matrix() is not None
+    assert dialog.get_model_matrix() is not None
+    assert dialog.pushButtonTutorialNext.isEnabled()
+    assert not dialog.checkBoxRomanian.isEnabled()
+
+
+@pytest.mark.parametrize('matrix_factory', [localities, agr101a])
+def test_tutorial_map_route_requires_boundaries_and_layers(
+    dialog: Dialog,
+    manager: FakeManager,
+    qgis_new_project: None,
+    monkeypatch: pytest.MonkeyPatch,
+    matrix_factory: c.Callable[[], Matrix],
+) -> None:
+    from qgis.core import QgsField, QgsFields, QgsVectorLayer
+    from qgis.PyQt.QtCore import QVariant
+    from qtempo.services import nuts
+
+    matrix = matrix_factory()
+    monkeypatch.setattr(dialog, 'load_nuts_index', lambda *args: None)
+    prepare_tutorial_work(dialog, matrix)
+    if matrix_factory is agr101a:
+        dialog.comboBoxGiscoYear.addItem('2024')
+        dialog.comboBoxGiscoScale.addItem('03m')
+        dialog.comboBoxGiscoProjection.addItem('4326')
+        units = nuts.Units(
+            [nuts.Unit('RO', nuts.SPATIAL_TYPE, '03m', '4326', '2024')]
+        )
+        monkeypatch.setattr(dialog, 'get_nuts_units', lambda: units)
+    else:
+        dialog.mGroupBoxServices.show()
+    project = QgsProject.instance()
+    assert project is not None
+    dialog.display_dialog()
+    dialog.pushButtonTutorial.click()
+    assert dialog.tabWidgetMatrix.currentIndex() == Tabs.TABLE.value
+    assert 'table_layer' not in dialog._tutorial_steps()
+    go_to_tutorial_step(dialog, 'boundaries')
+    assert dialog._tutorial_steps()[dialog.tutorial_step] == 'boundaries'
+    assert dialog.labelTutorialStep.text() == (
+        'Step 6 of 8' if matrix_factory is agr101a else 'Step 6 of 7'
+    )
+    assert dialog.tabWidgetMatrix.currentIndex() == Tabs.MAP.value
+    assert not dialog.tabWidgetMatrix.tabBar().isEnabled()
+    assert not dialog.pushButtonAddTableLayer.isEnabled()
+    if matrix_factory is localities:
+        assert dialog.pushButtonServiceInformation.isEnabled()
+        titles = reject_next_modal_dialog()
+        dialog.pushButtonServiceInformation.click()
+        assert titles
+        assert dialog._tutorial_steps()[dialog.tutorial_step] == 'boundaries'
+        assert dialog.pushButtonServiceInformation.isEnabled()
+    dialog.pushButtonTutorialBack.click()
+    assert dialog._tutorial_steps()[dialog.tutorial_step] == 'table_options'
+    assert dialog.tabWidgetMatrix.currentIndex() == Tabs.TABLE.value
+    assert not dialog.pushButtonServiceInformation.isEnabled()
+    dialog.pushButtonTutorialNext.click()
+    assert dialog._tutorial_steps()[dialog.tutorial_step] == 'boundaries'
+    assert dialog.pushButtonTutorialNext.isEnabled()
+    dialog.pushButtonTutorialNext.click()
+    if matrix_factory is agr101a:
+        assert dialog._tutorial_steps()[dialog.tutorial_step] == 'join'
+        assert not dialog.pushButtonTutorialNext.isEnabled()
+        dialog.pushButtonValidateJoin.click()
+        wait_until(
+            lambda: (
+                dialog._tutorial_steps()[dialog.tutorial_step] == 'vector_layer'
+            )
+        )
+        assert any(not row.matched for row in dialog.join_report)
+    else:
+        assert dialog._tutorial_steps()[dialog.tutorial_step] == 'vector_layer'
+    assert not dialog.pushButtonTutorialNext.isEnabled()
+    assert manager.replies == []
+    assert project.mapLayers() == {}
+    if matrix_factory is agr101a:
+        dialog.add_nuts_boundaries(
+            {},
+            'TEST',
+            '4326',
+            nuts.Boundaries(QgsFields(), [], {'RO': 'failed'}),
+        )
+        assert not dialog.pushButtonTutorialNext.isEnabled()
+        assert project.mapLayers() == {}
+    code = dialog.get_matrix_code()
+    assert code is not None
+    shown = dialog.get_model_matrix()
+    assert shown is not None
+    for level in dialog.get_map_levels(matrix):
+        layer = QgsVectorLayer(
+            'MultiPolygon?crs=EPSG:4326', f'{code} — {level.label}', 'memory'
+        )
+        provider = layer.dataProvider()
+        assert provider is not None
+        provider.addAttributes(
+            [QgsField(field.name, QVariant.String) for field in shown.fields]
+        )
+        layer.updateFields()
+        project.addMapLayer(layer)
+    dialog.show_tutorial_step()
+    wait_until(lambda: dialog.tutorial_step == -1)
+
+
+def test_tutorial_exit_stays_enabled_during_request(
+    dialog: Dialog, manager: FakeManager
+) -> None:
+    dialog.pushButtonTutorial.click()
+    dialog.request_handler.get(QNetworkRequest(), 'Fetching')
+    assert not dialog.treeWidgetTableOfContents.isEnabled()
+    assert dialog.tutorialPanel.isEnabled()
+    assert dialog.pushButtonTutorialExit.isEnabled()
+    assert not dialog.pushButtonTutorialNext.isEnabled()
+    dialog.pushButtonTutorialExit.click()
+    assert not dialog.tutorialPanel.isVisible()
+    manager.replies[0].succeed()
+    wait_until(dialog.treeWidgetTableOfContents.isEnabled)
+    assert dialog.pushButtonTutorial.isEnabled()
+
+
+def test_tutorial_updates_when_language_is_set_programmatically(
+    dialog: Dialog,
+) -> None:
+    dialog.pushButtonTutorial.click()
+    dialog.set_language('ro')
+    assert dialog.pushButtonTutorialBack.text() == 'Înapoi'
+    assert dialog.labelTutorialStep.text() == 'Pasul 1 din 6'
+    assert dialog.labelTutorialText.text().startswith('Căutați')
+    assert not dialog.checkBoxEnglish.isEnabled()
 
 
 @pytest.fixture

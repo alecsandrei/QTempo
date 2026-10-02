@@ -111,3 +111,4 @@ class QListWidgetItemRole(UserRole):
     MATRIX = auto()
     PARENT_NODE = auto()
     LEAF_NODE_RO = auto()
+    QUERY_SIGNATURE = auto()

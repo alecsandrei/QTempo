@@ -382,53 +382,6 @@
     </widget>
    </item>
   <item>
-   <widget class="QFrame" name="tutorialPanel">
-    <property name="visible">
-     <bool>false</bool>
-    </property>
-    <property name="frameShape">
-     <enum>QFrame::StyledPanel</enum>
-    </property>
-    <layout class="QVBoxLayout" name="tutorialLayout">
-     <item>
-      <widget class="QLabel" name="labelTutorialStep">
-       <property name="wordWrap">
-        <bool>true</bool>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="QLabel" name="labelTutorialText">
-       <property name="wordWrap">
-        <bool>true</bool>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <layout class="QHBoxLayout" name="tutorialButtonsLayout">
-       <item>
-        <spacer name="tutorialSpacer">
-         <property name="orientation"><enum>Qt::Horizontal</enum></property>
-         <property name="sizeHint" stdset="0">
-          <size><width>40</width><height>20</height></size>
-         </property>
-        </spacer>
-       </item>
-       <item><widget class="QPushButton" name="pushButtonTutorialBack">
-        <property name="text"><string>Back</string></property>
-       </widget></item>
-       <item><widget class="QPushButton" name="pushButtonTutorialNext">
-        <property name="text"><string>Next</string></property>
-       </widget></item>
-       <item><widget class="QPushButton" name="pushButtonTutorialExit">
-        <property name="text"><string>Exit</string></property>
-       </widget></item>
-      </layout>
-     </item>
-    </layout>
-   </widget>
-  </item>
-  <item>
    <layout class="QHBoxLayout" name="horizontalLayout_3">
      <item>
       <layout class="QHBoxLayout" name="horizontalLayout_2">
@@ -505,6 +458,54 @@
     </layout>
    </item>
   </layout>
+  <widget class="QFrame" name="tutorialPanel">
+   <property name="visible">
+    <bool>false</bool>
+   </property>
+   <property name="frameShape">
+    <enum>QFrame::StyledPanel</enum>
+   </property>
+   <property name="styleSheet">
+    <string notr="true">QFrame#tutorialPanel { background: palette(window); border: 2px solid #d88700; border-radius: 4px; }</string>
+   </property>
+   <layout class="QVBoxLayout" name="tutorialLayout">
+    <item>
+     <widget class="QLabel" name="labelTutorialStep">
+      <property name="wordWrap">
+       <bool>true</bool>
+      </property>
+     </widget>
+    </item>
+    <item>
+     <widget class="QLabel" name="labelTutorialText">
+      <property name="wordWrap">
+       <bool>true</bool>
+      </property>
+     </widget>
+    </item>
+    <item>
+     <layout class="QHBoxLayout" name="tutorialButtonsLayout">
+      <item>
+       <spacer name="tutorialSpacer">
+        <property name="orientation"><enum>Qt::Horizontal</enum></property>
+        <property name="sizeHint" stdset="0">
+         <size><width>40</width><height>20</height></size>
+        </property>
+       </spacer>
+      </item>
+      <item><widget class="QPushButton" name="pushButtonTutorialBack">
+       <property name="text"><string>Back</string></property>
+      </widget></item>
+      <item><widget class="QPushButton" name="pushButtonTutorialNext">
+       <property name="text"><string>Next</string></property>
+      </widget></item>
+      <item><widget class="QPushButton" name="pushButtonTutorialExit">
+       <property name="text"><string>Exit</string></property>
+      </widget></item>
+     </layout>
+    </item>
+   </layout>
+  </widget>
  </widget>
  <customwidgets>
   <customwidget>

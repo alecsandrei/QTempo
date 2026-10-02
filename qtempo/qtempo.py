@@ -30,8 +30,10 @@ from qgis.PyQt import sip, uic
 from qgis.PyQt.QtCore import (
     QAbstractTableModel,
     QCoreApplication,
+    QEvent,
     QModelIndex,
     QObject,
+    QPoint,
     QSignalBlocker,
     Qt,
     QTimer,
@@ -125,6 +127,8 @@ TUTORIAL_STEPS = (
     'request',
     'table_options',
 )
+# The gap between the tutorial panel and the edges of the pane it floats on
+TUTORIAL_PANEL_MARGIN = 9
 
 
 class Dialog(QDialog, UI_Dialog):  # type: ignore
@@ -142,6 +146,9 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.tutorial_displayed_step: str | None = None
         self.join_signature: tuple[object, ...] | None = None
         self.tutorialPanel.hide()
+        # The panel floats on a pane, which it follows
+        self.widgetCatalogue.installEventFilter(self)
+        self.splitterMatrix.installEventFilter(self)
         # Deleting the dialog uninstalls it
         self.translator = QTranslator(self)
         language = self.load_language()
@@ -236,6 +243,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.listWidgetMatrices = t.cast(QListWidget, self.listWidgetMatrices)
         self.tabWidgetMatrix = t.cast(QTabWidget, self.tabWidgetMatrix)
         self.splitterCatalogue = t.cast(QSplitter, self.splitterCatalogue)
+        self.widgetCatalogue = t.cast(QWidget, self.widgetCatalogue)
         self.splitterMatrix = t.cast(QSplitter, self.splitterMatrix)
         self.scrollAreaQuery = t.cast(QFrame, self.scrollAreaQuery)
         self.tableViewMatrix = t.cast(QTableView, self.tableViewMatrix)
@@ -680,6 +688,38 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                 f'{self.tutorial_target_style}; border: 3px solid #d88700;'
             )
 
+    def place_tutorial_panel(self) -> None:
+        """Floats the panel at the bottom of the pane without the
+        highlighted control, so that it neither covers the control nor
+        resizes the dialog."""
+        target = self.tutorial_target
+        pane: QWidget = self.widgetCatalogue
+        if target is not None and self.widgetCatalogue.isAncestorOf(target):
+            pane = self.splitterMatrix
+        panel = self.tutorialPanel
+        width = max(
+            pane.width() - 2 * TUTORIAL_PANEL_MARGIN,
+            panel.minimumSizeHint().width(),
+        )
+        height = panel.heightForWidth(width)
+        if height < 0:
+            height = panel.sizeHint().height()
+        top_left = pane.mapTo(self, QPoint(0, 0))
+        x = min(top_left.x() + TUTORIAL_PANEL_MARGIN, self.width() - width)
+        y = max(
+            top_left.y(),
+            top_left.y() + pane.height() - height - TUTORIAL_PANEL_MARGIN,
+        )
+        panel.setGeometry(max(0, x), y, width, height)
+        panel.raise_()
+
+    def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
+        if a0 is None or a1 is None:
+            return False
+        if a1.type() == QEvent.Type.Resize and self.tutorial_step >= 0:
+            self.place_tutorial_panel()
+        return super().eventFilter(a0, a1)
+
     def show_tutorial_step(self, switch_tab: bool = True) -> None:
         """Refresh guidance, the current gate, and the control lock."""
         if self.tutorial_step < 0:
@@ -772,6 +812,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             )
         )
         self.labelTutorialText.setText(description)
+        self.place_tutorial_panel()
         self._apply_tutorial_lock()
         if (
             step != self.tutorial_displayed_step

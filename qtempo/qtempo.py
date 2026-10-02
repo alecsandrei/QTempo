@@ -212,6 +212,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         # style
         self.tabWidgetMatrix.setTabEnabled(Tabs.TABLE.value, False)
         self.tabWidgetMatrix.setTabEnabled(Tabs.MAP.value, False)
+        self.pushButtonRequestData.setEnabled(False)
         self.mGroupBoxTableOptions.setVisible(False)
         # A tab widget is as tall as its tallest tab, even when hidden.
         # handle_map_tab shows the group of the queried units.
@@ -572,6 +573,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             Tabs.MAP.value, matrix is not None and matrix.has_units
         )
         self.tabWidgetMatrix.tabBar().setEnabled(True)
+        self.pushButtonRequestData.setEnabled(self.has_queries())
         self.pushButtonAddTableLayer.setEnabled(
             self.get_model_matrix() is not None
         )
@@ -1129,6 +1131,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
 
         if self.listWidgetMatrices.selectedItems():
             delete_layout_items(t.cast(QLayout, self.frameQuery.layout()))
+        self.pushButtonRequestData.setEnabled(self.has_queries())
         if self.listWidgetMatrices.count():
             with QSignalBlocker(self.listWidgetMatrices):
                 self.listWidgetMatrices.clear()
@@ -1360,6 +1363,12 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                 has_parent = False
             list_widget.setMinimumWidth(list_widget.width() + 5)
             list_widget.itemSelectionChanged.connect(self.show_tutorial_step)
+        self.pushButtonRequestData.setEnabled(self.has_queries())
+
+    def has_queries(self) -> bool:
+        """Whether the query tab shows the dimensions of a data table."""
+        layout = self.frameQuery.layout()
+        return layout is not None and layout.count() > 0
 
     def construct_queries(self) -> list[str]:
         """The encoded queries of the selected options. A dimension with

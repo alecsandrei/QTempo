@@ -80,7 +80,8 @@ def delete_layout_items(layout: QLayout | None) -> None:
 
 def parse_node_name(name: str) -> str:
     if '<a href' in name:
-        name = name[: name.index('<a href')]
+        # Some links are in parentheses
+        name = name[: name.index('<a href')].rstrip(string.whitespace + '(')
     return fix_trailing_whitespace(name)
 
 

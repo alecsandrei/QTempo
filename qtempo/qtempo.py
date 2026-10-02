@@ -965,11 +965,11 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         raise ValueError('unreachable')
 
     def load_language(self) -> Language:
-        """The saved language, else Romanian if QGIS is in Romanian."""
+        """The saved language, else Romanian."""
         language = QgsSettings().value(Setting.LANGUAGE.value)
         if language in ('en', 'ro'):
             return language
-        return 'ro' if QgsApplication.locale().startswith('ro') else 'en'
+        return 'ro'
 
     def set_language(self, language: Language) -> None:
         """Translates the dialog. The TEMPO data is fetched separately."""

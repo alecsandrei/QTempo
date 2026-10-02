@@ -1,6 +1,6 @@
 [project]
 name = "qtempo"
-version = "1.2.0"
+version = "1.3.0"
 description = "Plugin for accessing data from the TEMPO-Online statistical database of the National Institute of Statistics of Romania"
 readme = "README.md"
 license = "MIT"
@@ -25,6 +25,7 @@ default-groups = ["dev", "lint"]
 [tool.qgis-plugin-ci]
 plugin_path = "qtempo"
 project_slug = "QTempo"
+github_organization_slug = "alecsandrei"
 
 [tool.pyright]
 include = ["qtempo"]

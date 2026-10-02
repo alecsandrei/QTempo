@@ -1426,6 +1426,8 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             for field_ in matrix.dimensions
             if len(matrix.distinct(field_)) > 1
         ]
+        # Nothing to choose when every dimension has a single value
+        self.mGroupBoxTableOptions.setVisible(bool(dimensions))
         for i, field_ in enumerate(dimensions):
             label = QLabel(field_.name, self.frameTableOptions)
             label.setWordWrap(True)
@@ -1717,7 +1719,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         if matrix is None:
             return None
         self.clear_table_options()
-        self.mGroupBoxTableOptions.setVisible(matrix.has_units)
+        self.mGroupBoxTableOptions.setVisible(False)
         if matrix.has_units:
             self.add_table_options(matrix)
         self.update_table_view()

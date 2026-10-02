@@ -155,9 +155,13 @@ def long_values() -> Matrix:
 
 def many_options(count: int = 7) -> Matrix:
     """A table of Cluj with count options of two values each, the years
-    included."""
+    included. The names of the options wrap."""
     dimensions = [
-        dimension(code, f'Dimensiunea {code}', ['Prima', 'A doua'])
+        dimension(
+            code,
+            f'Dimensiunea {code} cu un nume lung din mai multe cuvinte',
+            ['Prima', 'A doua'],
+        )
         for code in range(10, 9 + count)
     ]
     response = pivot(

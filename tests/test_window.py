@@ -140,13 +140,15 @@ def rect_in_dialog(dialog: Dialog, widget: QWidget) -> QRect:
     return QRect(widget.mapTo(dialog, QPoint(0, 0)), widget.size())
 
 
-def assert_panel_on(dialog: Dialog, pane: QWidget) -> None:
-    """Asserts that the tutorial panel floats at the bottom of the pane."""
+def panel_is_on(dialog: Dialog, pane: QWidget) -> bool:
+    """Whether the tutorial panel floats at the bottom of the pane."""
     rect = rect_in_dialog(dialog, pane)
     panel = dialog.tutorialPanel.geometry()
-    assert rect.contains(panel)
-    assert panel.left() == rect.left() + TUTORIAL_PANEL_MARGIN
-    assert panel.bottom() == rect.bottom() - TUTORIAL_PANEL_MARGIN
+    return (
+        rect.contains(panel)
+        and panel.left() == rect.left() + TUTORIAL_PANEL_MARGIN
+        and panel.bottom() == rect.bottom() - TUTORIAL_PANEL_MARGIN
+    )
 
 
 def messages(dialog: Dialog) -> list[str]:
@@ -633,16 +635,17 @@ def test_tutorial_updates_when_language_is_set_programmatically(
 def test_the_tutorial_does_not_resize_the_dialog(dialog: Dialog) -> None:
     dialog.display_dialog()
     size = dialog.size()
-    minimum = dialog.minimumSizeHint()
+    # The panes may need to be wider for the panel, but never taller
+    height = dialog.minimumSizeHint().height()
     dialog.pushButtonTutorial.click()
     QCoreApplication.processEvents()
     assert dialog.tutorialPanel.isVisible()
     assert dialog.size() == size
-    assert dialog.minimumSizeHint() == minimum
+    assert dialog.minimumSizeHint().height() == height
     dialog.pushButtonTutorialExit.click()
     QCoreApplication.processEvents()
     assert dialog.size() == size
-    assert dialog.minimumSizeHint() == minimum
+    assert dialog.minimumSizeHint().height() == height
 
 
 def test_the_tutorial_panel_avoids_the_highlighted_control(
@@ -650,37 +653,45 @@ def test_the_tutorial_panel_avoids_the_highlighted_control(
 ) -> None:
     prepare_tutorial_work(dialog, not_geographic())
     dialog.display_dialog()
-    # A laptop screen, where each pane is wider than the panel
-    size = QSize(1400, 800)
-    dialog.resize(size)
-    wait_until(lambda: dialog.size() == size)
+    # The left pane of the small offscreen dialog is narrower than the panel
+    assert (
+        dialog.widgetCatalogue.width()
+        < dialog.tutorialPanel.minimumSizeHint().width()
+    )
     dialog.pushButtonTutorial.click()
     for step in dialog._tutorial_steps():
         go_to_tutorial_step(dialog, step)
+        # The splitter moves the other pane after one is widened
+        wait_until(
+            lambda: (
+                rect_in_dialog(dialog, dialog.widgetCatalogue).right()
+                < rect_in_dialog(dialog, dialog.splitterMatrix).left()
+            )
+        )
+        pane = dialog.widgetCatalogue
+        if step == 'dataset':
+            pane = dialog.splitterMatrix
+        assert panel_is_on(dialog, pane)
         target = dialog.tutorial_target
         assert target is not None
-        panel = dialog.tutorialPanel.geometry()
-        assert dialog.rect().contains(panel)
-        assert not panel.intersects(rect_in_dialog(dialog, target))
-        if step == 'dataset':
-            assert_panel_on(dialog, dialog.splitterMatrix)
-        else:
-            assert_panel_on(dialog, dialog.widgetCatalogue)
+        assert not dialog.tutorialPanel.geometry().intersects(
+            rect_in_dialog(dialog, target)
+        )
 
 
 def test_the_tutorial_panel_follows_its_pane(dialog: Dialog) -> None:
     dialog.display_dialog()
     dialog.pushButtonTutorial.click()
-    assert_panel_on(dialog, dialog.splitterMatrix)
+    wait_until(lambda: panel_is_on(dialog, dialog.splitterMatrix))
     # Dragging the handle between the panes
     sizes = dialog.splitterCatalogue.sizes()
     dialog.splitterCatalogue.setSizes([sizes[0] + 100, sizes[1] - 100])
     assert dialog.splitterCatalogue.sizes() != sizes
-    assert_panel_on(dialog, dialog.splitterMatrix)
+    assert panel_is_on(dialog, dialog.splitterMatrix)
     size = dialog.size() + QSize(120, 80)
     dialog.resize(size)
     wait_until(lambda: dialog.size() == size)
-    assert_panel_on(dialog, dialog.splitterMatrix)
+    assert panel_is_on(dialog, dialog.splitterMatrix)
 
 
 def test_the_tutorial_panel_wraps_its_text_in_a_narrow_pane(
@@ -688,13 +699,23 @@ def test_the_tutorial_panel_wraps_its_text_in_a_narrow_pane(
 ) -> None:
     dialog.display_dialog()
     dialog.pushButtonTutorial.click()
+    # Dragging the handle as far right as it goes
     dialog.splitterCatalogue.setSizes([10_000, 1])
     # The longer text
     dialog.set_language('ro')
+    wait_until(lambda: panel_is_on(dialog, dialog.splitterMatrix))
     panel = dialog.tutorialPanel
     assert panel.width() >= panel.minimumSizeHint().width()
     assert panel.height() >= panel.heightForWidth(panel.width())
-    assert dialog.rect().contains(panel.geometry())
+    assert not panel.geometry().intersects(
+        rect_in_dialog(dialog, dialog.treeWidgetTableOfContents)
+    )
+    # The handle goes further once the tutorial is over
+    dialog.pushButtonTutorialExit.click()
+    dialog.splitterCatalogue.setSizes([10_000, 1])
+    wait_until(
+        lambda: dialog.splitterMatrix.width() < panel.minimumSizeHint().width()
+    )
 
 
 @pytest.fixture
@@ -848,7 +869,7 @@ def test_display_dialog_restores_a_minimized_dialog(dialog: Dialog) -> None:
 
 
 @pytest.mark.parametrize('matrix_factory', [None, long_values, many_options])
-def test_a_reopened_dialog_fits_a_small_screen(
+def test_the_dialog_fits_a_small_screen(
     dialog: Dialog,
     monkeypatch: pytest.MonkeyPatch,
     matrix_factory: c.Callable[[], Matrix] | None,
@@ -857,13 +878,18 @@ def test_a_reopened_dialog_fits_a_small_screen(
     monkeypatch.setattr(dialog, 'screen', lambda: screen)
     if matrix_factory is not None:
         prepare_tutorial_work(dialog, matrix_factory())
-    # The size of the window frame is known once the dialog was shown
+    # Opened, then reopened, as if it was left on a larger screen
+    for opening in range(2):
+        dialog.move(1300, 700)
+        dialog.resize(2000, 1200)
+        dialog.display_dialog()
+        assert MACBOOK_AIR.contains(dialog.frameGeometry())
+        dialog.close()
     dialog.display_dialog()
-    dialog.close()
-    # As if it was left on a larger screen
-    dialog.move(1300, 700)
-    dialog.resize(2000, 1200)
-    dialog.display_dialog()
+    # Dragging the handle as far right as it goes, which wraps the options
+    dialog.splitterCatalogue.setSizes([10_000, 1])
+    for event in range(5):
+        QCoreApplication.processEvents()
     assert MACBOOK_AIR.contains(dialog.frameGeometry())
 
 

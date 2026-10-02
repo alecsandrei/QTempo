@@ -7,9 +7,14 @@ import pytest
 from qgis.core import QgsNetworkAccessManager, QgsProject
 from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QCoreApplication, Qt
-from qgis.PyQt.QtWidgets import QComboBox, QListWidgetItem, QPushButton
+from qgis.PyQt.QtWidgets import (
+    QComboBox,
+    QLabel,
+    QListWidgetItem,
+    QPushButton,
+)
 
-from qtempo.enums import QListWidgetItemRole, WidgetProperty
+from qtempo.enums import QListWidgetItemRole, Tabs, WidgetProperty
 from qtempo.matrix import Field, Fields, Matrix
 from qtempo.qtempo import Dialog, MatrixModel
 from qtempo.utils import get_widgets
@@ -21,6 +26,7 @@ from .helpers import (
     long_values,
     many_options,
     not_geographic,
+    wait_until,
 )
 
 
@@ -63,6 +69,17 @@ def shown(dialog: Dialog) -> Matrix:
 def is_enabled(button: QPushButton) -> bool:
     """Whether the button is enabled, even if its tab is not."""
     return button.isEnabledTo(button.parentWidget())
+
+
+def assert_options_scroll(dialog: Dialog, scrolls: bool) -> None:
+    """Asserts whether the options scroll, which they only do down."""
+    area = dialog.scrollAreaTableOptions
+    horizontal = area.horizontalScrollBar()
+    assert horizontal is not None
+    assert horizontal.maximum() == 0
+    vertical = area.verticalScrollBar()
+    assert vertical is not None
+    assert (vertical.maximum() > 0) is scrolls
 
 
 def names(matrix: Matrix) -> list[str]:
@@ -156,19 +173,71 @@ def test_long_values_do_not_widen_the_options(dialog: Dialog) -> None:
     ] == values
 
 
-@pytest.mark.parametrize(('count', 'scrolls'), [(6, False), (7, True)])
+# A dialog with one column of options, and one with two
+NARROW = 800
+WIDE = 2400
+
+
+@pytest.mark.parametrize(
+    ('width', 'count', 'scrolls'),
+    [(NARROW, 3, False), (NARROW, 4, True), (WIDE, 6, False), (WIDE, 7, True)],
+)
 def test_options_past_three_rows_scroll(
-    dialog: Dialog, count: int, scrolls: bool
+    dialog: Dialog, width: int, count: int, scrolls: bool
 ) -> None:
     show(dialog, many_options(count))
     assert len(combo_boxes(dialog)) == count
-    # Wide enough for the labels not to wrap, which makes the rows taller
-    dialog.resize(1400, 700)
+    # Resized from the other width, so that the options reflow
+    dialog.resize(NARROW + WIDE - width, 700)
     dialog.show()
     QCoreApplication.processEvents()
-    scroll_bar = dialog.scrollAreaTableOptions.verticalScrollBar()
-    assert scroll_bar is not None
-    assert (scroll_bar.maximum() > 0) is scrolls
+    dialog.resize(width, 700)
+    wait_until(lambda: dialog.width() == width)
+    QCoreApplication.processEvents()
+    assert_options_scroll(dialog, scrolls)
+
+
+def test_options_fit_when_their_tab_is_shown(dialog: Dialog) -> None:
+    dialog.resize(NARROW, 700)
+    dialog.show()
+    show(dialog, many_options(3))
+    QCoreApplication.processEvents()
+    # The data of a query is shown from the query tab
+    dialog.tabWidgetMatrix.setCurrentIndex(Tabs.QUERY.value)
+    show(dialog, many_options(4))
+    QCoreApplication.processEvents()
+    assert_options_scroll(dialog, True)
+
+
+def test_option_labels_wrap_no_more_than_they_prefer(dialog: Dialog) -> None:
+    show(dialog, many_options(4))
+    # Wide enough for the options in one column, not in two
+    dialog.resize(1300, 700)
+    dialog.show()
+    QCoreApplication.processEvents()
+    layout = dialog.frameTableOptions.layout()
+    assert layout is not None
+    for label in get_widgets(layout, QLabel):
+        # The height of the text, as the rows are as tall as combo boxes
+        assert label.heightForWidth(label.width()) <= label.sizeHint().height()
+
+
+def test_squeezed_options_hide_no_row(dialog: Dialog) -> None:
+    show(dialog, agr101a())
+    dialog.resize(NARROW, 700)
+    dialog.show()
+    QCoreApplication.processEvents()
+    # Dragging the handle as far right as it goes
+    dialog.splitterCatalogue.setSizes([10_000, 1])
+    for event in range(5):
+        QCoreApplication.processEvents()
+    area = dialog.scrollAreaTableOptions
+    horizontal = area.horizontalScrollBar()
+    assert horizontal is not None
+    assert horizontal.maximum() > 0
+    vertical = area.verticalScrollBar()
+    assert vertical is not None
+    assert vertical.maximum() == 0
 
 
 def test_add_table_layer_exports_the_shown_table(

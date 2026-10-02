@@ -145,10 +145,13 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.tutorial_last_complete = False
         self.tutorial_displayed_step: str | None = None
         self.join_signature: tuple[object, ...] | None = None
+        self.two_column_options_width = 0
         self.tutorialPanel.hide()
         # The panel floats on a pane, which it follows
         self.widgetCatalogue.installEventFilter(self)
         self.splitterMatrix.installEventFilter(self)
+        # The options fit the width of their area
+        self.scrollAreaTableOptions.installEventFilter(self)
         # Deleting the dialog uninstalls it
         self.translator = QTranslator(self)
         language = self.load_language()
@@ -323,6 +326,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         """Hide the tour and restore normal dialog controls."""
         self._highlight_tutorial_target(None)
         self.tutorialPanel.hide()
+        self.keep_room_for_tutorial_panel(False)
         self.tutorial_step = -1
         self.tutorial_last_complete = False
         self.tutorial_displayed_step = None
@@ -713,10 +717,26 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         panel.setGeometry(max(0, x), y, width, height)
         panel.raise_()
 
+    def keep_room_for_tutorial_panel(self, keep: bool) -> None:
+        """Keeps both panes as wide as the panel, which would otherwise spill
+        over the pane with the highlighted control."""
+        width = (
+            self.tutorialPanel.minimumSizeHint().width()
+            + 2 * TUTORIAL_PANEL_MARGIN
+        )
+        for pane in (self.widgetCatalogue, self.splitterMatrix):
+            # Never narrower than its controls need
+            pane.setMinimumWidth(
+                max(width, pane.minimumSizeHint().width()) if keep else 0
+            )
+
     def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
         if a0 is None or a1 is None:
             return False
-        if a1.type() == QEvent.Type.Resize and self.tutorial_step >= 0:
+        if a0 is self.scrollAreaTableOptions:
+            if a1.type() in (QEvent.Type.Show, QEvent.Type.Resize):
+                self.fit_table_options()
+        elif a1.type() == QEvent.Type.Resize and self.tutorial_step >= 0:
             self.place_tutorial_panel()
         return super().eventFilter(a0, a1)
 
@@ -812,6 +832,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             )
         )
         self.labelTutorialText.setText(description)
+        self.keep_room_for_tutorial_panel(True)
         self.place_tutorial_panel()
         self._apply_tutorial_lock()
         if (
@@ -860,12 +881,16 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
     def display_dialog(self) -> None:
         """Shows the dialog, or brings it back above QGIS if it is already
         open."""
-        if not self.isVisible():
+        hidden = not self.isVisible()
+        if hidden:
             self.fit_to_screen()
         if self.isMinimized():
             self.showNormal()
         else:
             self.show()
+        if hidden:
+            # The size of the window frame is only known once it is shown
+            self.fit_to_screen()
         self.raise_()
         self.activateWindow()
 
@@ -1515,14 +1540,93 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             layout.addWidget(combo_box, row, column * 2 + 1)
         layout.setColumnStretch(1, 1)
         layout.setColumnStretch(3, 1)
-        # The rows past MAX_VISIBLE_OPTION_ROWS scroll
-        rows = (len(dimensions) + 1) // 2
-        height = self.frameTableOptions.sizeHint().height()
-        if rows > MAX_VISIBLE_OPTION_ROWS:
-            height = height * MAX_VISIBLE_OPTION_ROWS // rows
-        self.scrollAreaTableOptions.setFixedHeight(
-            height + 2 * self.scrollAreaTableOptions.frameWidth()
+        # Narrower, two columns would wrap the labels more than one does
+        self.two_column_options_width = (
+            self.frameTableOptions.sizeHint().width()
         )
+        self.fit_table_options()
+
+    def fit_table_options(self) -> None:
+        """Lays the options out in two columns if they fit, else in one, and
+        shows MAX_VISIBLE_OPTION_ROWS rows of them at most."""
+        layout = self.frameTableOptions.layout()
+        area = self.scrollAreaTableOptions
+        # A hidden area has no width yet. It is fitted once shown.
+        if (
+            not isinstance(layout, QGridLayout)
+            or layout.count() == 0
+            or not area.isVisible()
+        ):
+            return None
+        options = list(
+            zip(get_widgets(layout, QLabel), get_widgets(layout, QComboBox))
+        )
+        frame = self.frameTableOptions
+        scroll_bar = area.verticalScrollBar()
+        assert scroll_bar is not None
+        horizontal_scroll_bar = area.horizontalScrollBar()
+        assert horizontal_scroll_bar is not None
+        width = area.width() - 2 * area.frameWidth()
+
+        def rows(columns: int) -> int:
+            return -(-len(options) // columns)
+
+        def scroll_bar_width(columns: int) -> int:
+            """The width of the scroll bar of the rows past
+            MAX_VISIBLE_OPTION_ROWS."""
+            if rows(columns) > MAX_VISIBLE_OPTION_ROWS:
+                return scroll_bar.sizeHint().width()
+            return 0
+
+        columns = 1
+        if width - scroll_bar_width(2) >= self.two_column_options_width:
+            columns = 2
+        cells = [divmod(i, columns) for i in range(len(options))]
+        if any(
+            layout.getItemPosition(layout.indexOf(option[0]))[:2]
+            != (row, column * 2)
+            for option, (row, column) in zip(options, cells)
+        ):
+            # Added back in order, as the options are read in layout order
+            for label, combo_box in options:
+                layout.removeWidget(label)
+                layout.removeWidget(combo_box)
+            for (label, combo_box), (row, column) in zip(options, cells):
+                layout.addWidget(label, row, column * 2)
+                layout.addWidget(combo_box, row, column * 2 + 1)
+            layout.setColumnStretch(3, columns - 1)
+        visible_rows = min(rows(columns), MAX_VISIBLE_OPTION_ROWS)
+
+        def visible_height(width: int) -> int:
+            """The height of the visible rows, whose labels wrap in a narrow
+            area."""
+            height = frame.heightForWidth(width)
+            if height < 0:
+                height = frame.sizeHint().height()
+            return height * visible_rows // rows(columns)
+
+        # Rows with labels wrapped past twice their height scroll too, so
+        # that a narrow area does not make the dialog taller
+        limit = 2 * frame.minimumSizeHint().height() * visible_rows
+        limit //= rows(columns)
+        scrolls = (
+            rows(columns) > MAX_VISIBLE_OPTION_ROWS
+            or visible_height(width) > limit
+        )
+        if scrolls:
+            width -= scroll_bar.sizeHint().width()
+        height = min(visible_height(width), limit)
+        # Narrower than a column, the options scroll sideways too
+        if frame.minimumSizeHint().width() > width:
+            height += horizontal_scroll_bar.sizeHint().height()
+        # A scroll bar shown as needed would narrow the area, so that the
+        # labels would wrap again and keep it shown
+        area.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOn
+            if scrolls
+            else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        area.setFixedHeight(height + 2 * area.frameWidth())
 
     def get_fixed(self, matrix: Matrix) -> dict[Field, str]:
         """The value chosen for each dimension. The dimensions with a single

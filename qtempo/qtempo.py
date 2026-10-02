@@ -56,6 +56,8 @@ from qgis.PyQt.QtWidgets import (
     QListWidgetItem,
     QProgressBar,
     QPushButton,
+    QScrollArea,
+    QSplitter,
     QTableView,
     QTableWidget,
     QTabWidget,
@@ -92,6 +94,7 @@ from .units import TerritorialUnit
 from .utils import (
     add_completer_to_combo_box,
     delete_layout_items,
+    fit_popup_to_items,
     fix_trailing_whitespace,
     get_children,
     get_list_widget_items,
@@ -110,6 +113,9 @@ from .widgets import (
 
 UI_Dialog = uic.loadUiType(Asset.DIALOG.value.as_posix())[0]
 
+# The width of the table options, in characters
+MIN_OPTION_CHARACTERS = 15
+MAX_VISIBLE_OPTION_ROWS = 3
 # The pivot service returns no data for a dimension with more options
 MAX_QUERY_OPTIONS = 1000
 TUTORIAL_STEPS = (
@@ -206,9 +212,16 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         # style
         self.tabWidgetMatrix.setTabEnabled(Tabs.MAP.value, False)
         self.mGroupBoxTableOptions.setVisible(False)
+        # A tab widget is as tall as its tallest tab, even when hidden.
+        # handle_map_tab shows the group of the queried units.
+        self.mGroupBoxServices.setVisible(False)
+        self.mGroupBoxGisco.setVisible(False)
         self.treeWidgetTableOfContents.setHeaderLabel('')
         self.add_services()
         self.set_language(language)
+        self.restore_layout()
+        # Emitted however the dialog closes
+        self.finished.connect(self.save_layout)
 
     def _cast_types(self):
         # no need to call this function
@@ -220,6 +233,8 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         )
         self.listWidgetMatrices = t.cast(QListWidget, self.listWidgetMatrices)
         self.tabWidgetMatrix = t.cast(QTabWidget, self.tabWidgetMatrix)
+        self.splitterCatalogue = t.cast(QSplitter, self.splitterCatalogue)
+        self.splitterMatrix = t.cast(QSplitter, self.splitterMatrix)
         self.scrollAreaQuery = t.cast(QFrame, self.scrollAreaQuery)
         self.tableViewMatrix = t.cast(QTableView, self.tableViewMatrix)
         self.frameQuery = t.cast(QFrame, self.frameQuery)
@@ -237,6 +252,9 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.mGroupBoxTableOptions = t.cast(
             QgsCollapsibleGroupBox, self.mGroupBoxTableOptions
         )
+        self.scrollAreaTableOptions = t.cast(
+            QScrollArea, self.scrollAreaTableOptions
+        )
         self.frameTableOptions = t.cast(QFrame, self.frameTableOptions)
         self.labelTableSummary = t.cast(QLabel, self.labelTableSummary)
         self.pushButtonAddTableLayer = t.cast(
@@ -248,6 +266,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.checkBoxEnglish = t.cast(QCheckBox, self.checkBoxEnglish)
         self.checkBoxRomanian = t.cast(QCheckBox, self.checkBoxRomanian)
         self.labelMapLevels = t.cast(QLabel, self.labelMapLevels)
+        self.scrollAreaMap = t.cast(QScrollArea, self.scrollAreaMap)
         self.mGroupBoxGisco = t.cast(
             QgsCollapsibleGroupBox, self.mGroupBoxGisco
         )
@@ -795,12 +814,68 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
     def display_dialog(self) -> None:
         """Shows the dialog, or brings it back above QGIS if it is already
         open."""
+        if not self.isVisible():
+            self.fit_to_screen()
         if self.isMinimized():
             self.showNormal()
         else:
             self.show()
         self.raise_()
         self.activateWindow()
+
+    def fit_to_screen(self) -> None:
+        """Shrinks the dialog to its screen and moves it inside. A dialog
+        which was never placed is centered on QGIS by Qt instead."""
+        screen = self.screen()
+        if screen is None:
+            return None
+        available = screen.availableGeometry()
+        frame = self.frameGeometry()
+        self.resize(
+            self.size().boundedTo(
+                available.size() - (frame.size() - self.size())
+            )
+        )
+        if not self.testAttribute(Qt.WidgetAttribute.WA_Moved):
+            return None
+        frame = self.frameGeometry()
+        self.move(
+            max(
+                available.left(),
+                min(frame.left(), available.right() - frame.width() + 1),
+            ),
+            max(
+                available.top(),
+                min(frame.top(), available.bottom() - frame.height() + 1),
+            ),
+        )
+
+    def restore_layout(self) -> None:
+        """Restores the size, the position and the splitters the dialog had
+        when it was last closed."""
+        settings = QgsSettings()
+        geometry = settings.value(Setting.GEOMETRY.value)
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        splitters = {
+            Setting.CATALOGUE_SPLITTER: (self.splitterCatalogue, [350, 650]),
+            Setting.MATRIX_SPLITTER: (self.splitterMatrix, [150, 450]),
+        }
+        for setting, (splitter, sizes) in splitters.items():
+            state = settings.value(setting.value)
+            if state is None or not splitter.restoreState(state):
+                # Proportions of the space, as the dialog is not shown yet
+                splitter.setSizes(sizes)
+
+    def save_layout(self) -> None:
+        settings = QgsSettings()
+        settings.setValue(Setting.GEOMETRY.value, self.saveGeometry())
+        settings.setValue(
+            Setting.CATALOGUE_SPLITTER.value, self.splitterCatalogue.saveState()
+        )
+        settings.setValue(
+            Setting.MATRIX_SPLITTER.value, self.splitterMatrix.saveState()
+        )
 
     def get_message_bar(self) -> QgsMessageBar:
         """The message bar of the dialog, or the QGIS one if the dialog is
@@ -1352,10 +1427,15 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             if len(matrix.distinct(field_)) > 1
         ]
         for i, field_ in enumerate(dimensions):
-            label = QLabel(
-                textwrap.fill(field_.name, width=40), self.frameTableOptions
-            )
+            label = QLabel(field_.name, self.frameTableOptions)
+            label.setWordWrap(True)
             combo_box = QComboBox(self.frameTableOptions)
+            # A combo box is as wide as its longest value otherwise. Set
+            # before the items, as the combo box caches its size.
+            combo_box.setSizeAdjustPolicy(
+                QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+            )
+            combo_box.setMinimumContentsLength(MIN_OPTION_CHARACTERS)
             add_completer_to_combo_box(combo_box)
             combo_box.setToolTip(
                 self.tr('Leave empty to show every value as a column.')
@@ -1363,6 +1443,10 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             combo_box.addItem('', None)
             for value in matrix.distinct(field_):
                 combo_box.addItem(value, value)
+                combo_box.setItemData(
+                    combo_box.count() - 1, value, Qt.ItemDataRole.ToolTipRole
+                )
+            fit_popup_to_items(combo_box)
             if field_ in default:
                 combo_box.setCurrentIndex(combo_box.findText(default[field_]))
             else:
@@ -1375,6 +1459,14 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             layout.addWidget(combo_box, row, column * 2 + 1)
         layout.setColumnStretch(1, 1)
         layout.setColumnStretch(3, 1)
+        # The rows past MAX_VISIBLE_OPTION_ROWS scroll
+        rows = (len(dimensions) + 1) // 2
+        height = self.frameTableOptions.sizeHint().height()
+        if rows > MAX_VISIBLE_OPTION_ROWS:
+            height = height * MAX_VISIBLE_OPTION_ROWS // rows
+        self.scrollAreaTableOptions.setFixedHeight(
+            height + 2 * self.scrollAreaTableOptions.frameWidth()
+        )
 
     def get_fixed(self, matrix: Matrix) -> dict[Field, str]:
         """The value chosen for each dimension. The dimensions with a single
@@ -1864,6 +1956,9 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.set_gui_state(True)
         if self.tutorial_step >= 0:
             self.show_tutorial_step()
+        else:
+            # A tour exited during the request could not unlock its controls
+            self._restore_tutorial_controls()
         # Disabling a widget takes away its focus
         widget = self.focus_widget
         if (

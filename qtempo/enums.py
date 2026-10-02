@@ -19,6 +19,9 @@ class Asset(Enum):
 
 class Setting(Enum):
     LANGUAGE = 'QTempo/language'
+    GEOMETRY = 'QTempo/geometry'
+    CATALOGUE_SPLITTER = 'QTempo/catalogueSplitter'
+    MATRIX_SPLITTER = 'QTempo/matrixSplitter'
 
 
 class URL(Enum):

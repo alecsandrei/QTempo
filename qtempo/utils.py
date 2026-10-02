@@ -43,6 +43,18 @@ def add_completer_to_combo_box(combobox: QComboBox) -> None:
     combobox.setCurrentIndex(-1)
 
 
+def fit_popup_to_items(combo_box: QComboBox) -> None:
+    """Widens the list of a combo box to its longest item, as the combo box
+    can be narrower."""
+    view = combo_box.view()
+    assert view is not None
+    scroll_bar = view.verticalScrollBar()
+    assert scroll_bar is not None
+    view.setMinimumWidth(
+        view.sizeHintForColumn(0) + scroll_bar.sizeHint().width()
+    )
+
+
 def set_combo_box_items(
     combo_box: QComboBox, items: list[str], default: str
 ) -> None:

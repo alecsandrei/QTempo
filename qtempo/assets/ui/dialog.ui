@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1180</width>
-    <height>751</height>
+    <width>1000</width>
+    <height>650</height>
    </rect>
   </property>
   <property name="sizePolicy">
@@ -21,12 +21,27 @@
   </property>
   <layout class="QVBoxLayout" name="verticalLayout_4">
    <item>
-    <widget class="QgsMessageBar" name="messageBar"/>
-   </item>
-   <item>
-    <layout class="QHBoxLayout" name="horizontalLayout">
-     <item>
+    <widget class="QSplitter" name="splitterCatalogue">
+     <property name="orientation">
+      <enum>Qt::Horizontal</enum>
+     </property>
+     <property name="childrenCollapsible">
+      <bool>false</bool>
+     </property>
+     <widget class="QWidget" name="widgetCatalogue">
       <layout class="QVBoxLayout" name="verticalLayout">
+       <property name="leftMargin">
+        <number>0</number>
+       </property>
+       <property name="topMargin">
+        <number>0</number>
+       </property>
+       <property name="rightMargin">
+        <number>0</number>
+       </property>
+       <property name="bottomMargin">
+        <number>0</number>
+       </property>
        <item>
         <widget class="QLineEdit" name="lineEditSearch">
          <property name="placeholderText">
@@ -37,16 +52,10 @@
        <item>
         <widget class="QTreeWidget" name="treeWidgetTableOfContents">
          <property name="sizePolicy">
-          <sizepolicy hsizetype="MinimumExpanding" vsizetype="MinimumExpanding">
+          <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
            <horstretch>0</horstretch>
            <verstretch>0</verstretch>
           </sizepolicy>
-         </property>
-         <property name="minimumSize">
-          <size>
-           <width>450</width>
-           <height>0</height>
-          </size>
          </property>
          <property name="horizontalScrollBarPolicy">
           <enum>Qt::ScrollBarAsNeeded</enum>
@@ -59,13 +68,17 @@
         </widget>
        </item>
       </layout>
-     </item>
-     <item>
-      <layout class="QVBoxLayout" name="verticalLayout_2">
-       <item>
+     </widget>
+     <widget class="QSplitter" name="splitterMatrix">
+      <property name="orientation">
+       <enum>Qt::Vertical</enum>
+      </property>
+      <property name="childrenCollapsible">
+       <bool>false</bool>
+      </property>
         <widget class="QListWidget" name="listWidgetMatrices">
          <property name="sizePolicy">
-          <sizepolicy hsizetype="MinimumExpanding" vsizetype="MinimumExpanding">
+          <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
            <horstretch>0</horstretch>
            <verstretch>0</verstretch>
           </sizepolicy>
@@ -76,12 +89,6 @@
            <height>0</height>
           </size>
          </property>
-         <property name="maximumSize">
-          <size>
-           <width>16777215</width>
-           <height>200</height>
-          </size>
-         </property>
          <property name="lineWidth">
           <number>1</number>
          </property>
@@ -89,8 +96,6 @@
           <set>Qt::AlignLeading</set>
          </property>
         </widget>
-       </item>
-       <item>
         <widget class="QTabWidget" name="tabWidgetMatrix">
          <property name="enabled">
           <bool>true</bool>
@@ -162,7 +167,15 @@
              </property>
              <layout class="QVBoxLayout" name="verticalLayout_5">
               <item>
-               <widget class="QFrame" name="frameTableOptions"/>
+               <widget class="QScrollArea" name="scrollAreaTableOptions">
+                <property name="frameShape">
+                 <enum>QFrame::NoFrame</enum>
+                </property>
+                <property name="widgetResizable">
+                 <bool>true</bool>
+                </property>
+                <widget class="QFrame" name="frameTableOptions"/>
+               </widget>
               </item>
               <item>
                <widget class="QLabel" name="labelTableSummary">
@@ -210,6 +223,28 @@
            <string>This tab is enabled when the queried data has territorial units (country, macroregions, development regions, counties or localities).</string>
           </attribute>
           <layout class="QGridLayout" name="gridLayout_5">
+           <item row="0" column="0">
+            <widget class="QScrollArea" name="scrollAreaMap">
+             <property name="frameShape">
+              <enum>QFrame::NoFrame</enum>
+             </property>
+             <property name="widgetResizable">
+              <bool>true</bool>
+             </property>
+             <widget class="QWidget" name="scrollAreaMapContents">
+              <layout class="QGridLayout" name="gridLayout_9">
+               <property name="leftMargin">
+                <number>0</number>
+               </property>
+               <property name="topMargin">
+                <number>0</number>
+               </property>
+               <property name="rightMargin">
+                <number>0</number>
+               </property>
+               <property name="bottomMargin">
+                <number>0</number>
+               </property>
            <item row="0" column="0">
             <widget class="QLabel" name="labelMapLevels">
              <property name="text">
@@ -329,6 +364,10 @@
              </layout>
             </widget>
            </item>
+              </layout>
+             </widget>
+            </widget>
+           </item>
            <item row="4" column="0">
             <widget class="QPushButton" name="pushButtonAddVectorLayer">
              <property name="text">
@@ -339,11 +378,9 @@
           </layout>
          </widget>
         </widget>
-       </item>
-      </layout>
-     </item>
-   </layout>
-  </item>
+     </widget>
+    </widget>
+   </item>
   <item>
    <widget class="QFrame" name="tutorialPanel">
     <property name="visible">
@@ -444,6 +481,16 @@
         </spacer>
        </item>
       </layout>
+     </item>
+     <item>
+      <widget class="QgsMessageBar" name="messageBar">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
+         <horstretch>1</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
+      </widget>
      </item>
      <item>
       <widget class="QDialogButtonBox" name="buttonBox">

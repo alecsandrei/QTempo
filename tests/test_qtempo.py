@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import collections.abc as c
 from types import SimpleNamespace
 
 import pytest
 from qgis.core import QgsNetworkAccessManager, QgsProject
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt import sip
+from qgis.PyQt.QtCore import QCoreApplication, Qt
 from qgis.PyQt.QtWidgets import QComboBox, QListWidgetItem, QPushButton
 
 from qtempo.enums import QListWidgetItemRole, WidgetProperty
@@ -12,13 +14,23 @@ from qtempo.matrix import Field, Fields, Matrix
 from qtempo.qtempo import Dialog, MatrixModel
 from qtempo.utils import get_widgets
 
-from .helpers import agr101a, by_sex, localities, not_geographic
+from .helpers import (
+    agr101a,
+    by_sex,
+    localities,
+    long_values,
+    many_options,
+    not_geographic,
+)
 
 
 @pytest.fixture
-def dialog() -> Dialog:
+def dialog() -> c.Iterator[Dialog]:
     qtempo = SimpleNamespace(network_manager=QgsNetworkAccessManager.instance())
-    return Dialog(qtempo)
+    dialog = Dialog(qtempo)
+    yield dialog
+    # A shown dialog would stay open
+    sip.delete(dialog)
 
 
 def show(dialog: Dialog, matrix: Matrix) -> None:
@@ -119,6 +131,44 @@ def test_no_options_without_units(dialog: Dialog) -> None:
     assert dialog.mGroupBoxTableOptions.isHidden()
     assert shown(dialog) is matrix
     assert not is_enabled(dialog.pushButtonAddVectorLayer)
+
+
+def test_long_values_do_not_widen_the_options(dialog: Dialog) -> None:
+    # Combo boxes may fit their values when they are first shown
+    dialog.show()
+    show(dialog, agr101a())
+    QCoreApplication.processEvents()
+    width = combo_boxes(dialog)['Categorii'].sizeHint().width()
+    dialog_width = dialog.minimumSizeHint().width()
+    show(dialog, long_values())
+    QCoreApplication.processEvents()
+    categories = combo_boxes(dialog)['Categorii']
+    assert categories.isVisible()
+    assert categories.sizeHint().width() == width
+    assert dialog.minimumSizeHint().width() == dialog_width
+    view = categories.view()
+    assert view is not None
+    assert view.minimumWidth() >= view.sizeHintForColumn(0)
+    values = [categories.itemText(i) for i in range(1, categories.count())]
+    assert [
+        categories.itemData(i, Qt.ItemDataRole.ToolTipRole)
+        for i in range(1, categories.count())
+    ] == values
+
+
+@pytest.mark.parametrize(('count', 'scrolls'), [(6, False), (7, True)])
+def test_options_past_three_rows_scroll(
+    dialog: Dialog, count: int, scrolls: bool
+) -> None:
+    show(dialog, many_options(count))
+    assert len(combo_boxes(dialog)) == count
+    # Wide enough for the labels not to wrap, which makes the rows taller
+    dialog.resize(1400, 700)
+    dialog.show()
+    QCoreApplication.processEvents()
+    scroll_bar = dialog.scrollAreaTableOptions.verticalScrollBar()
+    assert scroll_bar is not None
+    assert (scroll_bar.maximum() > 0) is scrolls
 
 
 def test_add_table_layer_exports_the_shown_table(

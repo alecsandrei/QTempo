@@ -7,7 +7,7 @@ import typing as t
 from types import SimpleNamespace
 
 import pytest
-from qgis.core import QgsProject
+from qgis.core import QgsProject, QgsSettings
 from qgis.gui import QgisInterface
 from qgis.PyQt import sip
 from qgis.PyQt.QtCore import (
@@ -15,6 +15,9 @@ from qgis.PyQt.QtCore import (
     QCoreApplication,
     QEvent,
     QObject,
+    QPoint,
+    QRect,
+    QSize,
     QTimer,
     Qt,
     pyqtSignal,
@@ -29,12 +32,22 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-from qtempo.enums import QListWidgetItemRole, Tabs
+from qtempo.enums import QListWidgetItemRole, Setting, Tabs
 from qtempo.exceptions import RequestError
 from qtempo.matrix import Matrix
-from qtempo.qtempo import Dialog, QTempo
+from qtempo.qtempo import TUTORIAL_PANEL_MARGIN, Dialog, QTempo
 
-from .helpers import agr101a, localities, not_geographic, wait_until
+from .helpers import (
+    agr101a,
+    localities,
+    long_values,
+    many_options,
+    not_geographic,
+    wait_until,
+)
+
+# The usable area of the MacBook Air the dialog was too big for
+MACBOOK_AIR = QRect(0, 0, 1470, 844)
 
 
 class FakeReply(QObject):
@@ -121,6 +134,19 @@ def visible_windows() -> set[QWidget]:
         for widget in QApplication.topLevelWidgets()
         if widget.isVisible()
     }
+
+
+def rect_in_dialog(dialog: Dialog, widget: QWidget) -> QRect:
+    return QRect(widget.mapTo(dialog, QPoint(0, 0)), widget.size())
+
+
+def assert_panel_on(dialog: Dialog, pane: QWidget) -> None:
+    """Asserts that the tutorial panel floats at the bottom of the pane."""
+    rect = rect_in_dialog(dialog, pane)
+    panel = dialog.tutorialPanel.geometry()
+    assert rect.contains(panel)
+    assert panel.left() == rect.left() + TUTORIAL_PANEL_MARGIN
+    assert panel.bottom() == rect.bottom() - TUTORIAL_PANEL_MARGIN
 
 
 def messages(dialog: Dialog) -> list[str]:
@@ -604,6 +630,73 @@ def test_tutorial_updates_when_language_is_set_programmatically(
     assert not dialog.checkBoxEnglish.isEnabled()
 
 
+def test_the_tutorial_does_not_resize_the_dialog(dialog: Dialog) -> None:
+    dialog.display_dialog()
+    size = dialog.size()
+    minimum = dialog.minimumSizeHint()
+    dialog.pushButtonTutorial.click()
+    QCoreApplication.processEvents()
+    assert dialog.tutorialPanel.isVisible()
+    assert dialog.size() == size
+    assert dialog.minimumSizeHint() == minimum
+    dialog.pushButtonTutorialExit.click()
+    QCoreApplication.processEvents()
+    assert dialog.size() == size
+    assert dialog.minimumSizeHint() == minimum
+
+
+def test_the_tutorial_panel_avoids_the_highlighted_control(
+    dialog: Dialog, qgis_new_project: None
+) -> None:
+    prepare_tutorial_work(dialog, not_geographic())
+    dialog.display_dialog()
+    # A laptop screen, where each pane is wider than the panel
+    size = QSize(1400, 800)
+    dialog.resize(size)
+    wait_until(lambda: dialog.size() == size)
+    dialog.pushButtonTutorial.click()
+    for step in dialog._tutorial_steps():
+        go_to_tutorial_step(dialog, step)
+        target = dialog.tutorial_target
+        assert target is not None
+        panel = dialog.tutorialPanel.geometry()
+        assert dialog.rect().contains(panel)
+        assert not panel.intersects(rect_in_dialog(dialog, target))
+        if step == 'dataset':
+            assert_panel_on(dialog, dialog.splitterMatrix)
+        else:
+            assert_panel_on(dialog, dialog.widgetCatalogue)
+
+
+def test_the_tutorial_panel_follows_its_pane(dialog: Dialog) -> None:
+    dialog.display_dialog()
+    dialog.pushButtonTutorial.click()
+    assert_panel_on(dialog, dialog.splitterMatrix)
+    # Dragging the handle between the panes
+    sizes = dialog.splitterCatalogue.sizes()
+    dialog.splitterCatalogue.setSizes([sizes[0] + 100, sizes[1] - 100])
+    assert dialog.splitterCatalogue.sizes() != sizes
+    assert_panel_on(dialog, dialog.splitterMatrix)
+    size = dialog.size() + QSize(120, 80)
+    dialog.resize(size)
+    wait_until(lambda: dialog.size() == size)
+    assert_panel_on(dialog, dialog.splitterMatrix)
+
+
+def test_the_tutorial_panel_wraps_its_text_in_a_narrow_pane(
+    dialog: Dialog,
+) -> None:
+    dialog.display_dialog()
+    dialog.pushButtonTutorial.click()
+    dialog.splitterCatalogue.setSizes([10_000, 1])
+    # The longer text
+    dialog.set_language('ro')
+    panel = dialog.tutorialPanel
+    assert panel.width() >= panel.minimumSizeHint().width()
+    assert panel.height() >= panel.heightForWidth(panel.width())
+    assert dialog.rect().contains(panel.geometry())
+
+
 @pytest.fixture
 def main_window(qgis_iface: QgisInterface) -> QWidget:
     """The QGIS window, active as when the toolbar icon is clicked. It stays
@@ -622,14 +715,26 @@ def manager() -> FakeManager:
 
 
 @pytest.fixture
-def dialog(
+def new_dialog(
     qgis_iface: QgisInterface, main_window: QWidget, manager: FakeManager
-) -> c.Iterator[Dialog]:
-    qtempo = SimpleNamespace(network_manager=manager, iface=qgis_iface)
-    dialog = Dialog(qtempo, main_window)
-    yield dialog
-    # The QGIS window of the session would keep it
-    sip.delete(dialog)
+) -> c.Iterator[c.Callable[[], Dialog]]:
+    """Creates dialogs, e.g. one opened after QGIS restarts."""
+    dialogs: list[Dialog] = []
+
+    def create() -> Dialog:
+        qtempo = SimpleNamespace(network_manager=manager, iface=qgis_iface)
+        dialogs.append(Dialog(qtempo, main_window))
+        return dialogs[-1]
+
+    yield create
+    # The QGIS window of the session would keep them
+    for dialog in dialogs:
+        sip.delete(dialog)
+
+
+@pytest.fixture
+def dialog(new_dialog: c.Callable[[], Dialog]) -> Dialog:
+    return new_dialog()
 
 
 @pytest.fixture
@@ -740,6 +845,76 @@ def test_display_dialog_restores_a_minimized_dialog(dialog: Dialog) -> None:
     wait_until(dialog.isActiveWindow)
     assert dialog.isVisible()
     assert not dialog.isMinimized()
+
+
+@pytest.mark.parametrize('matrix_factory', [None, long_values, many_options])
+def test_a_reopened_dialog_fits_a_small_screen(
+    dialog: Dialog,
+    monkeypatch: pytest.MonkeyPatch,
+    matrix_factory: c.Callable[[], Matrix] | None,
+) -> None:
+    screen = SimpleNamespace(availableGeometry=lambda: MACBOOK_AIR)
+    monkeypatch.setattr(dialog, 'screen', lambda: screen)
+    if matrix_factory is not None:
+        prepare_tutorial_work(dialog, matrix_factory())
+    # The size of the window frame is known once the dialog was shown
+    dialog.display_dialog()
+    dialog.close()
+    # As if it was left on a larger screen
+    dialog.move(1300, 700)
+    dialog.resize(2000, 1200)
+    dialog.display_dialog()
+    assert MACBOOK_AIR.contains(dialog.frameGeometry())
+
+
+def test_an_open_dialog_keeps_the_size_it_was_given(dialog: Dialog) -> None:
+    dialog.display_dialog()
+    # Larger than the screen, e.g. stretched over two
+    size = QSize(2000, 1200)
+    dialog.resize(size)
+    wait_until(lambda: dialog.size() == size)
+    dialog.display_dialog()
+    assert dialog.size() == size
+
+
+def test_the_dialog_reopens_with_its_size_and_splitters(
+    dialog: Dialog, new_dialog: c.Callable[[], Dialog]
+) -> None:
+    dialog.display_dialog()
+    # Smaller than the default size and the screen
+    size = QSize(700, 500)
+    dialog.resize(size)
+    wait_until(lambda: dialog.size() == size)
+    splitters = [dialog.splitterCatalogue, dialog.splitterMatrix]
+    default = [splitter.sizes() for splitter in splitters]
+    for splitter, (first, second) in zip(splitters, default):
+        splitter.setSizes([first + 40, second - 40])
+    sizes = [splitter.sizes() for splitter in splitters]
+    assert sizes != default
+    dialog.close()
+    reopened = new_dialog()
+    reopened.display_dialog()
+    assert reopened.size() == size
+    assert [
+        reopened.splitterCatalogue.sizes(),
+        reopened.splitterMatrix.sizes(),
+    ] == sizes
+
+
+def test_an_unreadable_splitter_state_is_ignored(
+    dialog: Dialog, new_dialog: c.Callable[[], Dialog]
+) -> None:
+    settings = QgsSettings()
+    for setting in (Setting.CATALOGUE_SPLITTER, Setting.MATRIX_SPLITTER):
+        settings.setValue(setting.value, QByteArray(b'not a state'))
+    restored = new_dialog()
+    for opened in (dialog, restored):
+        opened.display_dialog()
+    assert restored.size() == dialog.size()
+    assert (
+        restored.splitterCatalogue.sizes() == dialog.splitterCatalogue.sizes()
+    )
+    assert restored.splitterMatrix.sizes() == dialog.splitterMatrix.sizes()
 
 
 @pytest.mark.parametrize(

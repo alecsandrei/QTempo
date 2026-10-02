@@ -132,6 +132,56 @@ def by_sex() -> Matrix:
     )
 
 
+def long_values() -> Matrix:
+    """Agricultural area by county, with values longer than the dialog is
+    wide."""
+    values = [
+        f'{name} {"foarte " * 40}lunga' for name in ('Agricola', 'Arabila')
+    ]
+    response = pivot(
+        ['Categorii', 'Judete', 'Ani', 'Valoare'],
+        *([value, 'Cluj', 'Anul 2000', '1'] for value in values),
+    )
+    return Matrix.from_response(
+        response,
+        request_body(matTime=3),
+        leaf_node(
+            dimension(1, 'Categorii', values),
+            dimension(2, 'Judete', ['Cluj']),
+            YEARS,
+        ),
+    )
+
+
+def many_options(count: int = 7) -> Matrix:
+    """A table of Cluj with count options of two values each, the years
+    included."""
+    dimensions = [
+        dimension(code, f'Dimensiunea {code}', ['Prima', 'A doua'])
+        for code in range(10, 9 + count)
+    ]
+    response = pivot(
+        [
+            *(dimension['label'] for dimension in dimensions),
+            'Judete',
+            'Ani',
+            'Valoare',
+        ],
+        *(
+            [*[option] * (count - 1), 'Cluj', year, '1']
+            for option, year in (
+                ('Prima', 'Anul 1990'),
+                ('A doua', 'Anul 2000'),
+            )
+        ),
+    )
+    return Matrix.from_response(
+        response,
+        request_body(matTime=count + 1),
+        leaf_node(*dimensions, dimension(2, 'Judete', ['Cluj']), YEARS),
+    )
+
+
 def not_geographic() -> Matrix:
     response = pivot(
         ['Categorii', 'Ani', 'Valoare'],

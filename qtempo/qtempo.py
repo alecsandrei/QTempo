@@ -210,6 +210,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.join_report: list[JoinReportRow] = []
 
         # style
+        self.tabWidgetMatrix.setTabEnabled(Tabs.TABLE.value, False)
         self.tabWidgetMatrix.setTabEnabled(Tabs.MAP.value, False)
         self.mGroupBoxTableOptions.setVisible(False)
         # A tab widget is as tall as its tallest tab, even when hidden.
@@ -564,7 +565,9 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             widget.setEnabled(True)
         matrix = self.get_matrix()
         self.tabWidgetMatrix.setTabEnabled(Tabs.QUERY.value, True)
-        self.tabWidgetMatrix.setTabEnabled(Tabs.TABLE.value, True)
+        self.tabWidgetMatrix.setTabEnabled(
+            Tabs.TABLE.value, self.get_model_matrix() is not None
+        )
         self.tabWidgetMatrix.setTabEnabled(
             Tabs.MAP.value, matrix is not None and matrix.has_units
         )
@@ -1184,6 +1187,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
     def clear_table(self) -> None:
         if self.tableViewMatrix.model() is not None:
             self.tableViewMatrix.setModel(None)
+        self.tabWidgetMatrix.setTabEnabled(Tabs.TABLE.value, False)
 
     def switch_language_queries(self):
         reply = self.get_leaf_node()
@@ -1724,6 +1728,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             self.add_table_options(matrix)
         self.update_table_view()
         self.pushButtonAddVectorLayer.setEnabled(matrix.has_units)
+        self.tabWidgetMatrix.setTabEnabled(Tabs.TABLE.value, True)
         self.tabWidgetMatrix.setCurrentIndex(Tabs.TABLE.value)
 
     def display_service_information(self) -> None:

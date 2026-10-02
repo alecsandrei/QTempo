@@ -584,7 +584,9 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.tabWidgetMatrix.setTabEnabled(
             Tabs.MAP.value, matrix is not None and matrix.has_units
         )
-        self.tabWidgetMatrix.tabBar().setEnabled(True)
+        tab_bar = self.tabWidgetMatrix.tabBar()
+        assert tab_bar is not None
+        tab_bar.setEnabled(True)
         self.pushButtonRequestData.setEnabled(self.has_queries())
         self.pushButtonAddTableLayer.setEnabled(
             self.get_model_matrix() is not None
@@ -626,7 +628,9 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             self.pushButtonTutorial,
         ):
             widget.setEnabled(False)
-        self.tabWidgetMatrix.tabBar().setEnabled(False)
+        tab_bar = self.tabWidgetMatrix.tabBar()
+        assert tab_bar is not None
+        tab_bar.setEnabled(False)
         if step == 'dataset':
             self.lineEditSearch.setEnabled(True)
             self.treeWidgetTableOfContents.setEnabled(True)

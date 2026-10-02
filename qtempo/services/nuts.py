@@ -22,7 +22,7 @@ from qgis.PyQt.QtWidgets import QTableWidget
 
 from ..enums import NutsURL
 from ..exceptions import ServiceError
-from ..utils import color_row, get_table_item
+from ..utils import color_row, get_table_item, not_none
 
 COUNTRY_CODE = 'RO'
 SPATIAL_TYPE = 'region'
@@ -254,8 +254,7 @@ class BoundaryDownloader(QObject):
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self.table.setRowCount(len(self.units))
-        manager = QgsApplication.taskManager()
-        assert manager is not None
+        manager = not_none(QgsApplication.taskManager())
         for row, unit in enumerate(self.units):
             get_table_item(self.table, row, 0).setText(unit.id)
             get_table_item(self.table, row, 1).setText(unit.url)

@@ -103,6 +103,7 @@ from .utils import (
     get_tree_widget_items,
     get_tree_widget_items_r,
     get_widgets,
+    not_none,
     parse_node_name,
     set_combo_box_items,
     update_node_ancestors_and_children,
@@ -584,8 +585,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.tabWidgetMatrix.setTabEnabled(
             Tabs.MAP.value, matrix is not None and matrix.has_units
         )
-        tab_bar = self.tabWidgetMatrix.tabBar()
-        assert tab_bar is not None
+        tab_bar = not_none(self.tabWidgetMatrix.tabBar())
         tab_bar.setEnabled(True)
         self.pushButtonRequestData.setEnabled(self.has_queries())
         self.pushButtonAddTableLayer.setEnabled(
@@ -628,8 +628,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             self.pushButtonTutorial,
         ):
             widget.setEnabled(False)
-        tab_bar = self.tabWidgetMatrix.tabBar()
-        assert tab_bar is not None
+        tab_bar = not_none(self.tabWidgetMatrix.tabBar())
         tab_bar.setEnabled(False)
         if step == 'dataset':
             self.lineEditSearch.setEnabled(True)
@@ -957,8 +956,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         closed."""
         if self.isVisible():
             return self.messageBar
-        message_bar = self.qtempo.iface.messageBar()
-        assert message_bar
+        message_bar = not_none(self.qtempo.iface.messageBar())
         return message_bar
 
     def show_progress(self, text: str) -> None:
@@ -968,12 +966,10 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         ):
             self.progress_item.setText(text)
             return None
-        item = self.messageBar.createMessage(text)
-        assert item is not None
+        item = not_none(self.messageBar.createMessage(text))
         progress_bar = QProgressBar(item)
         progress_bar.setRange(0, 0)
-        layout = item.layout()
-        assert layout is not None
+        layout = not_none(item.layout())
         layout.addWidget(progress_bar)
         self.messageBar.pushWidget(item, Qgis.MessageLevel.Info)
         self.progress_item = item
@@ -1061,8 +1057,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             QDialogButtonBox.StandardButton.Cancel: self.tr('Cancel'),
         }
         for button, text in buttons.items():
-            push_button = self.buttonBox.button(button)
-            assert push_button is not None
+            push_button = not_none(self.buttonBox.button(button))
             push_button.setText(text)
         for item in get_list_widget_items(self.listWidgetServices):
             service = t.cast(
@@ -1113,14 +1108,16 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         )
 
         def find_child(context: Context) -> Context:
-            assert 'children' in node
+            if 'children' not in node:
+                raise ValueError('unreachable')
             for child in node['children']:
                 if child['code'] == context['code']:
                     return child
             raise ValueError('unreachable')
 
         def switch_matrices_language():
-            assert 'children' in node
+            if 'children' not in node:
+                raise ValueError('unreachable')
             for item in items:
                 context = item.data(QListWidgetItemRole.CONTEXT.value)
                 child = find_child(context)
@@ -1161,7 +1158,6 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         )
 
         for item in items:
-            assert item is not None
             if item.childCount():
                 self.filter_toc(search_string, item)
                 item.setHidden(
@@ -1220,7 +1216,8 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         )
 
         def add_items():
-            assert 'children' in node
+            if 'children' not in node:
+                raise ValueError('unreachable')
             for child in node['children']:
                 if child['childrenUrl'] != 'matrix':
                     continue
@@ -1237,12 +1234,13 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
 
     def get_matrix_code(self) -> str | None:
         selected_items = self.listWidgetMatrices.selectedItems()
-        assert selected_items
+        if not selected_items:
+            raise ValueError('unreachable')
         return t.cast(
             Context, selected_items[0].data(QListWidgetItemRole.CONTEXT.value)
         )['code']
 
-    def get_leaf_node(self) -> QNetworkReply | None:
+    def get_leaf_node(self) -> QNetworkReply:
         dataset_code = self.get_matrix_code()
 
         request = QNetworkRequest(
@@ -1264,7 +1262,6 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
 
     def switch_language_queries(self):
         reply = self.get_leaf_node()
-        assert reply is not None
 
         def find_dimension(
             dimensions: list[Dimension], dimension_code: int
@@ -1283,8 +1280,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         def switch_language():
             leaf_node = t.cast(LeafNode, json.loads(reply.readAll().data()))
             self.add_leaf_node_to_list_widget_item(leaf_node)
-            frame_layout = self.frameQuery.layout()
-            assert frame_layout is not None
+            frame_layout = not_none(self.frameQuery.layout())
             layouts = get_children(frame_layout, QVBoxLayout)
             for layout in layouts:
                 list_widget = get_widgets(layout, QListWidgetAlwaysSelected)[0]
@@ -1364,7 +1360,6 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         reply = self.get_leaf_node()
 
         def add_dimensions() -> None:
-            assert reply is not None
             leaf_node = t.cast(LeafNode, json.loads(reply.readAll().data()))
             self.add_leaf_node_to_list_widget_item(leaf_node)
             if leaf_node is not None:
@@ -1464,8 +1459,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         return [':'.join(query) for query in itertools.product(*dimensions)]
 
     def construct_body(self, query: str) -> RequestBody:
-        current_item = self.listWidgetMatrices.currentItem()
-        assert current_item
+        current_item = not_none(self.listWidgetMatrices.currentItem())
         leaf_node = t.cast(
             LeafNode, current_item.data(QListWidgetItemRole.LEAF_NODE.value)
         )
@@ -1566,10 +1560,8 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
             zip(get_widgets(layout, QLabel), get_widgets(layout, QComboBox))
         )
         frame = self.frameTableOptions
-        scroll_bar = area.verticalScrollBar()
-        assert scroll_bar is not None
-        horizontal_scroll_bar = area.horizontalScrollBar()
-        assert horizontal_scroll_bar is not None
+        scroll_bar = not_none(area.verticalScrollBar())
+        horizontal_scroll_bar = not_none(area.horizontalScrollBar())
         width = area.width() - 2 * area.frameWidth()
 
         def rows(columns: int) -> int:
@@ -1679,8 +1671,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         return levels
 
     def handle_map_tab(self) -> None:
-        data = self.get_matrix()
-        assert data is not None
+        data = not_none(self.get_matrix())
         self.tabWidgetMatrix.setTabEnabled(Tabs.MAP.value, data.has_units)
         if not data.has_units:
             return None
@@ -1705,8 +1696,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         task.taskCompleted.connect(partial(self.handle_nuts_index, task))
         task.taskTerminated.connect(partial(self.handle_nuts_index, task))
         self.nuts_index_task = task
-        manager = QgsApplication.taskManager()
-        assert manager is not None
+        manager = not_none(QgsApplication.taskManager())
         manager.addTask(task)
 
     def handle_nuts_index(self, task: nuts.FetchNutsIndexTask) -> None:
@@ -1760,8 +1750,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         )
 
     def validate_join(self) -> None:
-        matrix = self.get_matrix()
-        assert matrix is not None
+        matrix = not_none(self.get_matrix())
         available = self.get_nuts_units()
         if available is None:
             return self.push_nuts_index_warning()
@@ -1850,8 +1839,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                 set_matrix()
 
         def set_matrix() -> None:
-            current_item = self.listWidgetMatrices.currentItem()
-            assert current_item
+            current_item = not_none(self.listWidgetMatrices.currentItem())
             current_item.setData(
                 QListWidgetItemRole.MATRIX.value,
                 Matrix.from_response(
@@ -1935,8 +1923,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
                 item.setSelected(True)
 
     def add_vector_layer(self) -> None:
-        matrix = self.get_model_matrix()
-        assert matrix is not None
+        matrix = not_none(self.get_model_matrix())
         levels = self.get_map_levels(matrix)
         if (self.downloader is not None and self.downloader.is_running) or (
             self.localities_task is not None
@@ -1956,8 +1943,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         projection = self.comboBoxGiscoProjection.currentText()
         if not (year and scale and projection):
             return self.push_nuts_index_warning()
-        code = self.get_matrix_code()
-        assert code is not None
+        code = not_none(self.get_matrix_code())
         by_level = {level: matrix.filter_level(level) for level in levels}
         units = dict.fromkeys(
             nuts.Unit(unit.code, nuts.SPATIAL_TYPE, scale, projection, year)
@@ -2015,8 +2001,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         self.show_tutorial_step()
 
     def add_localities_layer(self, matrix: Matrix) -> None:
-        service = self.get_selected_service()
-        assert service is not None
+        service = not_none(self.get_selected_service())
         task = FetchLocalitiesTask(
             service, [unit for unit in matrix.units or [] if unit is not None]
         )
@@ -2031,8 +2016,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         task.taskTerminated.connect(partial(self.handle_localities_error, task))
         self.localities_task = task
         self.pushButtonAddVectorLayer.setEnabled(False)
-        manager = QgsApplication.taskManager()
-        assert manager is not None
+        manager = not_none(QgsApplication.taskManager())
         manager.addTask(task)
         message_bar = self.get_message_bar()
         message_bar.pushInfo(
@@ -2068,8 +2052,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
     def add_layers(self, layers: list[QgsVectorLayer]) -> None:
         """Adds the layers, from the coarsest level up, and zooms to the
         first one."""
-        project = QgsProject.instance()
-        assert project is not None
+        project = not_none(QgsProject.instance())
         for layer in layers:
             layer.setCustomProperty(
                 'qtempo/tutorial_signature',
@@ -2092,8 +2075,7 @@ class Dialog(QDialog, UI_Dialog):  # type: ignore
         if model is None:
             return None
         table_layer = model.as_table(self.get_matrix_code())
-        instance = QgsProject().instance()
-        assert instance
+        instance = not_none(QgsProject().instance())
         instance.addMapLayer(table_layer)
         table_layer.setCustomProperty(
             'qtempo/tutorial_signature',
@@ -2244,15 +2226,13 @@ class RequestHandler:
         self, request: QNetworkRequest, data: bytes, text: str
     ) -> QNetworkReply:
         self.show_progress(text)
-        reply = self.manager.post(request, data)
-        assert reply is not None
+        reply = not_none(self.manager.post(request, data))
         self.keep_until_finished(reply)
         return reply
 
     def get(self, request: QNetworkRequest, text: str) -> QNetworkReply:
         self.show_progress(text)
-        reply = self.manager.get(request)
-        assert reply is not None
+        reply = not_none(self.manager.get(request))
         self.keep_until_finished(reply)
         return reply
 

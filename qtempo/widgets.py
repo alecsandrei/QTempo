@@ -15,7 +15,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-from .utils import color_row, get_list_widget_items, get_table_item
+from .utils import color_row, get_list_widget_items, get_table_item, not_none
 
 
 class QListWidgetAlwaysSelected(QListWidget):
@@ -24,16 +24,14 @@ class QListWidgetAlwaysSelected(QListWidget):
     def __init__(self, parent: QWidget):
         super().__init__(parent)
         self.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
-        model = self.model()
-        assert model is not None
+        model = not_none(self.model())
         model.rowsInserted.connect(self._select_first_row)
 
     def _select_first_row(
         self, index: QModelIndex, first: int, last: int
     ) -> None:
         self.setCurrentRow(first)
-        model = self.model()
-        assert model is not None
+        model = not_none(self.model())
         model.rowsInserted.disconnect()
 
     def _get_first_visible_item(self) -> QListWidgetItem | None:

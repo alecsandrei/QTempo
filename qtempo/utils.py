@@ -37,8 +37,7 @@ def sort_nodes(nodes: list[Node]) -> None:
 def add_completer_to_combo_box(combobox: QComboBox) -> None:
     combobox.setEditable(True)
     combobox.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-    completer = combobox.completer()
-    assert completer is not None
+    completer = not_none(combobox.completer())
     completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
     combobox.setCurrentIndex(-1)
 
@@ -46,10 +45,8 @@ def add_completer_to_combo_box(combobox: QComboBox) -> None:
 def fit_popup_to_items(combo_box: QComboBox) -> None:
     """Widens the list of a combo box to its longest item, as the combo box
     can be narrower."""
-    view = combo_box.view()
-    assert view is not None
-    scroll_bar = view.verticalScrollBar()
-    assert scroll_bar is not None
+    view = not_none(combo_box.view())
+    scroll_bar = not_none(view.verticalScrollBar())
     view.setMinimumWidth(
         view.sizeHintForColumn(0) + scroll_bar.sizeHint().width()
     )
@@ -69,8 +66,7 @@ def set_combo_box_items(
 def delete_layout_items(layout: QLayout | None) -> None:
     if layout is not None:
         while layout.count():
-            item = layout.takeAt(0)
-            assert item is not None
+            item = not_none(layout.takeAt(0))
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
@@ -90,6 +86,14 @@ def fix_trailing_whitespace(str_: str) -> str:
 
 
 T = t.TypeVar('T', bound=QObject)
+V = t.TypeVar('V')
+
+
+def not_none(value: V | None) -> V:
+    """The value, which may be typed as optional but is set."""
+    if value is None:
+        raise ValueError('Did not expect None')
+    return value
 
 
 def get_children(parent: QWidget | QLayout, search_for: t.Type[T]) -> list[T]:
@@ -103,8 +107,7 @@ def get_children(parent: QWidget | QLayout, search_for: t.Type[T]) -> list[T]:
 def get_widgets(parent: QLayout, search_for: t.Type[T]) -> list[T]:
     widgets = []
     for i in range(parent.count()):
-        layout_item = parent.itemAt(i)
-        assert layout_item is not None
+        layout_item = not_none(parent.itemAt(i))
         item = layout_item.widget()
         if item is not None and isinstance(item, search_for):
             widgets.append(item)

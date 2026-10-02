@@ -19,6 +19,7 @@ from qgis.PyQt.QtCore import QVariant
 from ._typing import LeafNode, RequestBody
 from .enums import Level
 from .units import TerritorialUnit, resolve_dimension
+from .utils import not_none
 
 
 @dataclass
@@ -339,8 +340,7 @@ class Matrix(c.Mapping):
         for i, row in enumerate(self.data):
             feature = QgsFeature(attributes)
             if self.has_units:
-                assert self.units
-                unit = self.units[i]
+                unit = not_none(self.units)[i]
                 row = [*row, unit.code if unit is not None else None]
             feature.setAttributes(row)
             features.append(feature)
@@ -350,18 +350,16 @@ class Matrix(c.Mapping):
 
     def get_units(self, level: Level) -> list[TerritorialUnit]:
         """The distinct units of a level, sorted by code."""
-        assert self.units is not None
         units = {
             unit.code: unit
-            for unit in self.units
+            for unit in not_none(self.units)
             if unit is not None and unit.level is level
         }
         return [units[code] for code in sorted(units)]
 
     def filter_level(self, level: Level) -> Matrix:
-        assert self.units is not None
         rows, units = [], []
-        for row, unit in zip(self.data, self.units):
+        for row, unit in zip(self.data, not_none(self.units)):
             if unit is not None and unit.level is level:
                 rows.append(row)
                 units.append(unit)
@@ -379,10 +377,9 @@ class Matrix(c.Mapping):
 
         Boundaries without a matching row are discarded.
         """
-        assert self.units is not None
         rows = {
             unit.code: row
-            for unit, row in zip(self.units, self.data)
+            for unit, row in zip(not_none(self.units), self.data)
             if unit is not None
         }
         layer = QgsVectorLayer(f'MultiPolygon?crs={crs}', name, 'memory')

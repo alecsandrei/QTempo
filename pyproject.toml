@@ -13,6 +13,7 @@ dev = [
     "pytest-qgis>=5.0.0",
 ]
 lint = [
+    "bandit>=1.9.4",
     "pyqt5-stubs>=5.15.6.0",
     "pyright[nodejs]>=1.1.414",
     "ruff>=0.16.9",
